@@ -21,7 +21,6 @@ interface UserPanelProps {
   isAdminUnlocked?: boolean;
   passcode?: string;
   loading?: boolean;
-  logUserActivity?: (action: string) => void;
 }
 
 function BotSkeleton() {
@@ -75,8 +74,7 @@ function UserPanel({
   userId,
   isAdminUnlocked,
   passcode,
-  loading,
-  logUserActivity
+  loading
 }: UserPanelProps) {
   // Navigation & Sub-tabs
   const [activeTab, setActiveTab] = useState<"GL" | "Futa" | "Feedback" | "Requests" | "Bookmarks">("GL");

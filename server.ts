@@ -12,6 +12,17 @@ function broadcastStateUpdate() {
   });
 }
 
+// Send periodic keep-alive pings to keep SSE stream open across Cloud Run proxies
+setInterval(() => {
+  sseClients.forEach((client) => {
+    try {
+      client.write(':ping\n\n');
+    } catch (e) {
+      sseClients.delete(client);
+    }
+  });
+}, 15000);
+
 import express from "express";
 import path from "path";
 import fs from "fs";
@@ -221,6 +232,7 @@ function removeFromPendingQueue(key: string) {
     savePendingQueue();
   }
 }
+
 
 async function firestoreWrite(collPath: string, docId: string, data: any) {
   const key = `${collPath}/${docId}`;
@@ -644,6 +656,11 @@ async function optimizeStateData(state: AppState): Promise<AppState> {
 // Global in-memory local server state synced instantly to file and loaded asynchronously from Firestore
 let state: AppState;
 let isFirestoreLoaded = false;
+let isInitialLoadComplete = false;
+let initialLoadResolve: (() => void) | null = null;
+const initialLoadPromise = new Promise<void>((resolve) => {
+  initialLoadResolve = resolve;
+});
 
 // Views buffering to reduce Firestore write operations and save quota limits on high-frequency click events
 const viewsBuffer: Record<string, number> = {};
@@ -674,25 +691,14 @@ function flushViewsToFirestore() {
 // Automatically flush buffered views to Firestore every 3 minutes
 setInterval(flushViewsToFirestore, 3 * 60 * 1000);
 
-// Helper function to log activity
+// Helper function to log activity (Cloud Logging only, Zero RAM or Disk overhead!)
 async function logActivity(nickname: string, action: string, userAgent?: string) {
   try {
-    const database = getDb();
-    if (!database || !state) return;
+    const timeStr = new Date().toISOString();
+    const userStr = nickname || "Khách ẩn danh";
     
-    const log: VisitorLog = {
-      id: "log_" + Date.now() + "_" + Math.floor(Math.random() * 1000),
-      nickname: nickname || "Khách ẩn danh",
-      action,
-      timestamp: new Date().toISOString(),
-      userAgent
-    };
-    
-    // Keep up to 2000 newest logs in memory and local backup file
-    state.visitorLogs = [log, ...(state.visitorLogs || [])].slice(0, 2000);
-    
-    // Save to local backup file and trigger throttled cloud sync
-    saveStateBackup(state);
+    // Direct log to Cloud Logging via stdout console.log
+    console.log(`[ACTIVITY LOG] [${timeStr}] User: ${userStr} | Action: ${action} | UA: ${userAgent || 'Unknown'}`);
   } catch (err) {
     console.warn("Logging activity failed:", err);
   }
@@ -766,6 +772,12 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
           console.log(`⚡ [Consolidated Loading Mode] Loaded all ${mainStateData.bots.length} bots from a single Firestore document (1 read operation instead of 41+)!`);
           loadedFromMainState = true;
         }
+      }
+      
+      // FORCED RECOVERY: If we are empty, force read from individual collections
+      if (!loadedFromMainState || (mainStateData && mainStateData.bots && mainStateData.bots.length === 0)) {
+         console.warn("⚠️ FORCED RECOVERY: mainState is empty or missing, falling back to individual collections!");
+         loadedFromMainState = false;
       }
     } catch (e: any) {
       console.warn("⚠️ Consolidated mainState could not be read, falling back to multi-collection slow read path:", e.message);
@@ -866,6 +878,7 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
         visitorLogs: mainStateData.visitorLogs || localState.visitorLogs || []
       };
 
+      isFirestoreLoaded = true;
       lastFirestoreReadTime = Date.now();
       return restoredState;
     }
@@ -900,6 +913,7 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
       });
     } catch (e) {
       console.warn("Could not load bots from Firestore:", (e as any).message);
+      throw e;
     }
 
     // 3. Announcements from Firestore
@@ -911,6 +925,7 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
       });
     } catch (e) {
       console.warn("Could not load announcements from Firestore:", (e as any).message);
+      throw e;
     }
 
     // 4. Feedbacks from Firestore
@@ -922,6 +937,7 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
       });
     } catch (e) {
       console.warn("Could not load feedbacks from Firestore:", (e as any).message);
+      throw e;
     }
 
     // 5. Bot Requests from Firestore
@@ -933,6 +949,7 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
       });
     } catch (e) {
       console.warn("Could not load botRequests from Firestore:", (e as any).message);
+      throw e;
     }
 
     // 5.5 Polls from Firestore
@@ -944,27 +961,10 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
       });
     } catch (e) {
       console.warn("Could not load polls from Firestore:", (e as any).message);
+      throw e;
     }
 
-    // 6. Visitor Logs - Load from dedicated document 'appData/visitorLogs' on startup to prevent reset/data loss
-    let firestoreLogs: VisitorLog[] = [];
-    try {
-      const logsDoc = await getDoc(doc(database, "appData", "visitorLogs"));
-      recordFirestoreReads(1, "Visitor Logs Restoration");
-      if (logsDoc.exists()) {
-        const logsData = logsDoc.data();
-        if (logsData && Array.isArray(logsData.visitorLogs)) {
-          firestoreLogs = logsData.visitorLogs;
-          console.log(`⚡ [Visitor Logs Restored] Loaded ${firestoreLogs.length} logs from Cloud.`);
-        }
-      }
-    } catch (e: any) {
-      console.warn("Could not load visitor logs from Firestore:", e.message);
-    }
-    if (firestoreLogs.length === 0) {
-      firestoreLogs = localState.visitorLogs || [];
-    }
-
+    // Visitor Logs are managed purely in RAM & console.log Cloud Logging (Zero Firestore Costs)
     // Gộp dữ liệu Bots thông minh (comments, replies, v.v.)
     const localBots = localState.bots || [];
     const botMap = new Map<string, Bot>();
@@ -1079,13 +1079,8 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
     firestorePolls.forEach(fsP => pollMap.set(fsP.id, fsP));
     const polls = Array.from(pollMap.values()).sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    // Gộp Visitor Logs (Keep up to 2000 newest logs)
-    const logMap = new Map<string, VisitorLog>();
-    (localState.visitorLogs || []).forEach(log => logMap.set(log.id, log));
-    firestoreLogs.forEach(log => logMap.set(log.id, log));
-    const visitorLogs = Array.from(logMap.values())
-      .sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-      .slice(-2000);
+    // Visitor Logs maintained in RAM/local backup
+    const visitorLogs = (localState.visitorLogs || []).slice(0, 200);
 
     console.log(`Success! Smart Merged: ${bots.length} Bots, ${announcements.length} Announcements, ${feedbacks.length} Feedbacks, ${botRequests.length} Bot Requests, ${polls.length} Polls, ${visitorLogs.length} Visitor Logs.`);
 
@@ -1124,42 +1119,24 @@ let pendingSaveState: AppState | null = null;
 let lastVisitorLogsSyncTime = 0;
 let lastMainStateSyncTime = 0;
 
-function saveVisitorLogsToFirestoreThrottled() {
-  const now = Date.now();
-  if (now - lastVisitorLogsSyncTime < 5 * 60 * 1000) {
-    return; // Sync at most once every 5 minutes to protect write operations quota
-  }
-
-  const database = getDb();
-  if (!database || !state || !state.visitorLogs || state.visitorLogs.length === 0) return;
-
-  lastVisitorLogsSyncTime = now;
-  console.log("☁️ [Visitor Logs Cloud Backup] Syncing visitor logs to Firestore...");
-  setDoc(doc(database, "appData", "visitorLogs"), {
-    visitorLogs: state.visitorLogs,
-    updatedAt: new Date().toISOString()
-  })
-  .then(() => {
-    console.log(`✅ [Visitor Logs Cloud Backup] Successfully backed up ${state.visitorLogs.length} visitor logs to Firestore!`);
-  })
-  .catch((err) => {
-    console.warn("⚠️ [Visitor Logs Cloud Backup] Failed to backup visitor logs:", err.message);
-  });
-}
-
 function saveMainStateToFirestoreThrottled(force = false) {
   const now = Date.now();
-  if (!force && now - lastMainStateSyncTime < 2 * 60 * 1000) {
-    return; // Sync at most once every 2 minutes to protect write operations quota
+  if (!force && now - lastMainStateSyncTime < 10 * 1000) {
+    return; // Sync at most once every 10 seconds unless forced
   }
 
   const database = getDb();
   if (!database || !state || !state.bots || state.bots.length === 0) return;
 
+  // Safety Shield: NEVER overwrite Firestore if server startup has not finished loading from Firestore!
+  if (!isFirestoreLoaded) {
+    console.warn("⚠️ [Cloud Backup Shield] Skipping write to Firestore: Server has not loaded data from Firestore yet.");
+    return;
+  }
+
   lastMainStateSyncTime = now;
   console.log("☁️ [Consolidated Cloud Backup] Syncing consolidated mainState to Firestore...");
 
-  // Sanitize bots to ensure zero raw base64 images remain in Firestore, ensuring safe <1MB sizes
   const sanitizedBots = state.bots.map((b) => {
     if (b.imageUrl && b.imageUrl.startsWith("data:image/")) {
       return { ...b, imageUrl: "" };
@@ -1174,7 +1151,7 @@ function saveMainStateToFirestoreThrottled(force = false) {
     botRequests: state.botRequests || [],
     authorSettings: state.authorSettings || {},
     polls: state.polls || [],
-    visitorLogs: [], // Visitor logs are persistingly saved in their own separate cloud document
+    visitorLogs: [], // Zero Firestore quota used for visitor logs
     updatedAt: new Date().toISOString()
   };
 
@@ -1186,6 +1163,77 @@ function saveMainStateToFirestoreThrottled(force = false) {
       console.warn("⚠️ [Consolidated Cloud Backup] Failed to backup mainState to Firestore:", err.message);
     });
 }
+
+// RAM Flush helper when Cloud Run scale-down or shutdown (SIGTERM / SIGINT) is received
+async function flushRAMToFirestore(): Promise<void> {
+  const database = getDb();
+  if (!database || !state) return;
+
+  if (!isFirestoreLoaded) {
+    console.warn("⚠️ [RAM Flush Shield] Skipping RAM Flush to Firestore: Firestore was never loaded successfully during this server run.");
+    return;
+  }
+
+  console.log("⚡ [RAM Flush] Cloud Run container shutting down (SIGTERM/SIGINT). Flushing in-memory state & buffered views to Firestore...");
+
+  // 1. Flush buffered views synchronously
+  const entries = Object.entries(viewsBuffer);
+  if (entries.length > 0) {
+    console.log(`📊 [RAM Flush] Flushing ${entries.length} buffered bot views...`);
+    for (const [id, count] of entries) {
+      if (count > 0) {
+        delete viewsBuffer[id];
+        try {
+          await updateDoc(doc(database, "bots", id), { views: increment(count) });
+          console.log(`📊 [RAM Flush] Successfully flushed +${count} views to bot ${id}`);
+        } catch (e: any) {
+          console.error(`📊 [RAM Flush] Failed to flush views for bot ${id}:`, e.message);
+        }
+      }
+    }
+  }
+
+  // 2. Flush mainState to Firestore appData/mainState
+  if (state.bots && state.bots.length > 0) {
+    const sanitizedBots = state.bots.map((b) => {
+      if (b.imageUrl && b.imageUrl.startsWith("data:image/")) {
+        return { ...b, imageUrl: "" };
+      }
+      return b;
+    });
+
+    const mainStateData = {
+      bots: sanitizedBots,
+      announcements: state.announcements || [],
+      feedbacks: state.feedbacks || [],
+      botRequests: state.botRequests || [],
+      authorSettings: state.authorSettings || {},
+      polls: state.polls || [],
+      visitorLogs: [],
+      updatedAt: new Date().toISOString()
+    };
+
+    try {
+      await setDoc(doc(database, "appData", "mainState"), mainStateData);
+      console.log("✅ [RAM Flush] Successfully saved complete mainState to Firestore appData/mainState before exit!");
+    } catch (err: any) {
+      console.error("❌ [RAM Flush] Failed to flush mainState to Firestore:", err.message);
+    }
+  }
+}
+
+let isShuttingDown = false;
+async function handleShutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`⚠️ Signal ${signal} received. Initiating RAM flush...`);
+  await flushRAMToFirestore();
+  console.log("👋 Flush complete. Gracefully exiting server process.");
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => handleShutdown("SIGTERM"));
+process.on("SIGINT", () => handleShutdown("SIGINT"));
 
 function saveStateBackup(state: AppState) {
   broadcastStateUpdate(); // Real-time push to all online clients
@@ -1235,8 +1283,6 @@ function performSave(state: AppState) {
       console.error("Error saving state redundant backup locally:", err);
     } else {
       console.log(`💾 Backup state saved asynchronously successfully (${data.length} bytes).`);
-      // Throttled visitor logs backup to Firestore appData/visitorLogs
-      saveVisitorLogsToFirestoreThrottled();
       // Throttled consolidated state backup to Firestore appData/mainState
       saveMainStateToFirestoreThrottled();
     }
@@ -1254,6 +1300,31 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+  // Middleware to hold API requests until initial Firestore loading has successfully completed
+  const waitForInitialLoad = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!req.url.startsWith("/api/") || req.url === "/api/health" || req.url === "/api/ping" || req.url === "/api/stream") {
+      return next();
+    }
+
+    if (isInitialLoadComplete) {
+      return next();
+    }
+
+    console.log(`⏳ [Initial Load Gate] Holding API request: ${req.method} ${req.url} until Firestore state is fully restored...`);
+    try {
+      const timeout = new Promise<void>((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout waiting for Firestore initialization")), 10000)
+      );
+      await Promise.race([initialLoadPromise, timeout]);
+      next();
+    } catch (err: any) {
+      console.warn(`⚠️ [Initial Load Gate] Proceeding without Firestore initialization due to: ${err.message}`);
+      next();
+    }
+  };
+
+  app.use(waitForInitialLoad);
 
   // Prevent browser caching for all API responses to ensure real-time updates
   app.use((req, res, next) => {
@@ -1286,6 +1357,12 @@ async function startServer() {
     }
   }).catch((err) => {
     console.error("⚠️ Initial Firestore state restoration failed:", err);
+  }).finally(() => {
+    isInitialLoadComplete = true;
+    if (initialLoadResolve) {
+      initialLoadResolve();
+    }
+    console.log("🔓 [Initial Load Gate] Gate opened. APIs are now fully accessible.");
   });
 
   // Cứu dữ liệu lượt views bị mất khi Cloud Run tự động Reset (Graceful Shutdown)
@@ -1455,7 +1532,6 @@ async function startServer() {
                   });
                 }
               });
-              if (botChanged) firestoreWrite("bots", bot.id, bot).catch(console.error);
             });
             
             state.feedbacks.forEach(fb => {
@@ -1474,7 +1550,6 @@ async function startServer() {
                   }
                 });
               }
-              if (fbChanged) firestoreWrite("feedbacks", fb.id, fb).catch(console.error);
             });
             
             state.botRequests.forEach(req => {
@@ -1493,7 +1568,6 @@ async function startServer() {
                   }
                 });
               }
-              if (reqChanged) firestoreWrite("botRequests", req.id, req).catch(console.error);
             });
             
             if (stateChanged) saveStateBackup(state);
@@ -1512,6 +1586,26 @@ async function startServer() {
 
 // --- Server-Sent Events (SSE) for Real-Time Sync without Firestore Reads ---
 
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    isFirestoreLoaded,
+    bufferedViewsCount: Object.keys(viewsBuffer).length
+  });
+});
+
+app.get("/api/ping", (req, res) => {
+  res.json({
+    status: "pong",
+    timestamp: Date.now(),
+    uptime: Math.floor(process.uptime()),
+    pendingViews: Object.keys(viewsBuffer).length,
+    activeConnections: sseClients.size
+  });
+});
 
 app.get("/api/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
@@ -1567,10 +1661,7 @@ app.get("/api/stream", (req, res) => {
     res.json({ totalClicks: total });
   });
 
-  app.post("/api/visitor-logs", async (req, res) => {
-    const { nickname, action } = req.body;
-    const ua = req.headers["user-agent"];
-    await logActivity(nickname, action, ua);
+  app.post("/api/visitor-logs", (req, res) => {
     res.json({ success: true });
   });
 
@@ -1673,6 +1764,78 @@ app.get("/api/stream", (req, res) => {
     }
   });
 
+  // 2.5 Apply Diff Patch (Sync Only on Change)
+  app.post("/api/patch-state", async (req, res) => {
+    try {
+      const { type, id, action, patch, nickname } = req.body;
+      if (!type || !id) {
+        return res.status(400).json({ error: "Yêu cầu diff patch không hợp lệ (thiếu type hoặc id)" });
+      }
+
+      let modified = false;
+      const database = getDb();
+
+      if (type === "bot" && Array.isArray(state.bots)) {
+        const idx = state.bots.findIndex(b => b.id === id);
+        if (action === "delete" && idx >= 0) {
+          const removedName = state.bots[idx].name;
+          state.bots.splice(idx, 1);
+          logActivity(nickname || "Admin", `Đã xóa Bot: ${removedName}`);
+          modified = true;
+        } else if (idx >= 0 && patch) {
+          state.bots[idx] = { ...state.bots[idx], ...patch, updatedAt: new Date().toISOString() };
+          logActivity(nickname || "Admin", `Đã cập nhật Bot: ${state.bots[idx].name}`);
+          modified = true;
+        }
+      } else if (type === "feedback" && Array.isArray(state.feedbacks)) {
+        const idx = state.feedbacks.findIndex(f => f.id === id);
+        if (action === "delete" && idx >= 0) {
+          state.feedbacks.splice(idx, 1);
+          logActivity(nickname || "Admin", `Đã xóa ý kiến phản hồi`);
+          modified = true;
+        } else if (idx >= 0 && patch) {
+          state.feedbacks[idx] = { ...state.feedbacks[idx], ...patch };
+          modified = true;
+        }
+      } else if (type === "request" && Array.isArray(state.botRequests)) {
+        const idx = state.botRequests.findIndex(r => r.id === id);
+        if (action === "delete" && idx >= 0) {
+          state.botRequests.splice(idx, 1);
+          logActivity(nickname || "Admin", `Đã xóa đề xuất Bot ID: ${id}`);
+          modified = true;
+        } else if (idx >= 0 && patch) {
+          state.botRequests[idx] = { ...state.botRequests[idx], ...patch };
+          modified = true;
+        }
+      } else if (type === "poll" && Array.isArray(state.polls)) {
+        const idx = state.polls.findIndex(p => p.id === id);
+        if (action === "delete" && idx >= 0) {
+          state.polls.splice(idx, 1);
+          logActivity(nickname || "Admin", `Đã xóa khảo sát ID: ${id}`);
+          modified = true;
+        } else if (idx >= 0 && patch) {
+          state.polls[idx] = { ...state.polls[idx], ...patch };
+          modified = true;
+        }
+      } else if (type === "authorSettings" && patch) {
+        state.authorSettings = { ...state.authorSettings, ...patch };
+        logActivity("Admin", "Đã cập nhật cài đặt tác giả");
+        modified = true;
+      }
+
+      if (modified) {
+        saveStateBackup(state);
+        saveMainStateToFirestoreThrottled(true);
+        return res.json({ success: true, state });
+      } else {
+        return res.status(404).json({ error: "Không tìm thấy đối tượng để áp dụng diff patch" });
+      }
+    } catch (e: any) {
+      console.error("Lỗi khi áp dụng diff patch:", e);
+      return res.status(500).json({ error: "Lỗi máy chủ khi áp dụng diff patch" });
+    }
+  });
+
   // 3. Add or update bot (Admin Only)
   app.post("/api/bots", async (req, res) => {
     if (!isAdmin(req)) {
@@ -1731,7 +1894,7 @@ app.get("/api/stream", (req, res) => {
     }
 
     saveStateBackup(state);
-    firestoreWrite("bots", targetBot.id, targetBot).catch(console.error);
+    saveMainStateToFirestoreThrottled(true);
     res.json({ success: true, state });
   });
 
@@ -1747,7 +1910,6 @@ app.get("/api/stream", (req, res) => {
       state.bots = state.bots.filter(b => b.id !== id);
       saveStateBackup(state);
       saveMainStateToFirestoreThrottled(true);
-      firestoreDelete("bots", id).catch(console.error);
       res.json({ success: true, state });
     } else {
       res.status(404).json({ error: "Không tìm thấy Bot" });
@@ -1775,7 +1937,6 @@ app.get("/api/stream", (req, res) => {
         ));
         affectedCount++;
         // Write backup to firestore
-        await firestoreWrite("bots", bot.id, bot).catch(console.error);
       }
     }
 
@@ -1803,7 +1964,6 @@ app.get("/api/stream", (req, res) => {
         bot.tags = bot.tags.filter(t => t !== cleanTag);
         affectedCount++;
         // Write backup to firestore
-        await firestoreWrite("bots", bot.id, bot).catch(console.error);
       }
     }
 
@@ -1815,59 +1975,6 @@ app.get("/api/stream", (req, res) => {
 
   // Helper to sync single bot from firestore before mutations
   async function syncSingleBotFromFirestore(botId: string): Promise<Bot | null> {
-    try {
-      const database = getDb();
-      if (!database) return null;
-      const docRef = doc(database, "bots", botId);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        const fsBot = docSnap.data() as Bot;
-        const index = state.bots.findIndex(b => b.id === botId);
-        if (index >= 0) {
-          const localBot = state.bots[index];
-          // Gộp comments
-          const localComments = localBot.comments || [];
-          const fsComments = fsBot.comments || [];
-          const commentMap = new Map<string, Comment>();
-          localComments.forEach(c => commentMap.set(c.id, { ...c }));
-          fsComments.forEach(fsC => {
-            const localC = commentMap.get(fsC.id);
-            if (!localC) {
-              commentMap.set(fsC.id, { ...fsC });
-            } else {
-              // Gộp replies
-              const localReplies = localC.replies || [];
-              const fsReplies = fsC.replies || [];
-              const replyMap = new Map<string, CommentReply>();
-              localReplies.forEach(r => replyMap.set(r.id, r));
-              fsReplies.forEach(fsR => replyMap.set(fsR.id, fsR));
-              localC.replies = Array.from(replyMap.values()).sort((a,b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-              
-              // Gộp likes
-              const likedUsers = new Set([...(localC.likedUserIds || []), ...(fsC.likedUserIds || [])]);
-              localC.likedUserIds = Array.from(likedUsers);
-              localC.likes = Math.max(localC.likes || 0, fsC.likes || 0, localC.likedUserIds.length);
-              
-              commentMap.set(fsC.id, localC);
-            }
-          });
-          const mergedComments = Array.from(commentMap.values()).sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-          state.bots[index] = {
-            ...localBot,
-            ...fsBot,
-            views: Math.max(localBot.views || 0, fsBot.views || 0),
-            likes: Math.max(localBot.likes || 0, fsBot.likes || 0),
-            likedUserIds: Array.from(new Set([...(localBot.likedUserIds || []), ...(fsBot.likedUserIds || [])])),
-            comments: mergedComments
-          };
-          saveStateBackup(state);
-          return state.bots[index];
-        }
-      }
-    } catch (error) {
-      console.warn(`[Sync Single Bot] Failed for bot ${botId}:`, error);
-    }
     return null;
   }
 
@@ -2109,6 +2216,7 @@ app.get("/api/stream", (req, res) => {
           res.json({ success: true, likes: comment.likes, liked: true });
         }
         saveStateBackup(state);
+        saveMainStateToFirestoreThrottled(true);
         if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
       } else {
         res.status(404).json({ error: "Không tìm thấy bình luận" });
@@ -2144,6 +2252,7 @@ app.get("/api/stream", (req, res) => {
             res.json({ success: true, likes: reply.likes, liked: true });
           }
           saveStateBackup(state);
+          saveMainStateToFirestoreThrottled(true);
           if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
         } else {
           res.status(404).json({ error: "Không tìm thấy phản hồi bình luận" });
@@ -2176,7 +2285,6 @@ app.get("/api/stream", (req, res) => {
 
     state.announcements.unshift(newAnnouncement);
     saveStateBackup(state);
-    firestoreWrite("announcements", newAnnouncement.id, newAnnouncement).catch(console.error);
     res.json({ success: true, state });
   });
 
@@ -2192,7 +2300,6 @@ app.get("/api/stream", (req, res) => {
       state.announcements = state.announcements.filter(a => a.id !== id);
       saveStateBackup(state);
       saveMainStateToFirestoreThrottled(true);
-      firestoreDelete("announcements", id).catch(console.error);
       res.json({ success: true, state });
     } else {
       res.status(404).json({ error: "Không tìm thấy thông báo" });
@@ -2219,7 +2326,6 @@ app.get("/api/stream", (req, res) => {
     state.feedbacks.unshift(newFeedback);
     // Removed to keep visitor logs focused on key actions only
     saveStateBackup(state);
-    firestoreWrite("feedbacks", newFeedback.id, newFeedback).catch(console.error);
     res.json({ success: true, feedback: newFeedback });
   });
 
@@ -2235,7 +2341,6 @@ app.get("/api/stream", (req, res) => {
     if (feedback) {
       feedback.reply = reply;
       saveStateBackup(state);
-      firestoreWrite("feedbacks", feedback.id, feedback).catch(console.error);
       res.json({ success: true, feedback });
     } else {
       res.status(404).json({ error: "Không tìm thấy ý kiến góp ý" });
@@ -2259,7 +2364,6 @@ app.get("/api/stream", (req, res) => {
     state.feedbacks = state.feedbacks.filter(f => f.id !== id);
     saveStateBackup(state);
     saveMainStateToFirestoreThrottled(true);
-    firestoreDelete("feedbacks", id).catch(console.error);
     res.json({ success: true });
   });
 
@@ -2286,7 +2390,6 @@ app.get("/api/stream", (req, res) => {
     feedback.updatedAt = new Date().toISOString();
     
     saveStateBackup(state);
-    firestoreWrite("feedbacks", id, feedback).catch(console.error);
     res.json({ success: true, feedback });
   });
 
@@ -2329,7 +2432,6 @@ app.get("/api/stream", (req, res) => {
     state.feedbacks[index].replies!.push(newReply);
 
     saveStateBackup(state);
-    firestoreWrite("feedbacks", id, state.feedbacks[index]).catch(console.error);
     res.json({ success: true, feedback: state.feedbacks[index] });
   });
 
@@ -2356,7 +2458,6 @@ app.get("/api/stream", (req, res) => {
     state.botRequests.unshift(newRequest);
     // Removed to keep visitor logs focused on key actions only
     saveStateBackup(state);
-    firestoreWrite("botRequests", newRequest.id, newRequest).catch(console.error);
     res.json({ success: true, request: newRequest });
   });
 
@@ -2410,7 +2511,6 @@ app.get("/api/stream", (req, res) => {
     state.botRequests = state.botRequests.filter(r => r.id !== id);
     saveStateBackup(state);
     saveMainStateToFirestoreThrottled(true);
-    firestoreDelete("botRequests", id).catch(console.error);
     res.json({ success: true, state });
   });
 
@@ -2426,7 +2526,6 @@ app.get("/api/stream", (req, res) => {
       if (reply !== undefined) request.reply = reply;
       if (status !== undefined) request.status = status;
       saveStateBackup(state);
-      firestoreWrite("botRequests", request.id, request).catch(console.error);
       res.json({ success: true, request, state });
     } else {
       res.status(404).json({ error: "Không tìm thấy yêu cầu" });
@@ -2489,7 +2588,6 @@ app.get("/api/stream", (req, res) => {
     }
     state.authorSettings = settings;
     saveStateBackup(state);
-    firestoreWrite("global", "authorSettings", state.authorSettings).catch(console.error);
     res.json({ success: true, settings: state.authorSettings, state });
   });
 
@@ -2524,7 +2622,6 @@ app.get("/api/stream", (req, res) => {
     if (!state.polls) state.polls = [];
     state.polls.unshift(newPoll);
     saveStateBackup(state);
-    firestoreWrite("polls", newPoll.id, newPoll).catch(console.error);
     res.json({ success: true, poll: newPoll, state });
   });
 
@@ -2576,7 +2673,6 @@ app.get("/api/stream", (req, res) => {
     }
 
     saveStateBackup(state);
-    firestoreWrite("polls", poll.id, poll).catch(console.error);
     res.json({ success: true, poll, state });
   });
 
@@ -2635,7 +2731,6 @@ app.get("/api/stream", (req, res) => {
 
 
     saveStateBackup(state);
-    firestoreWrite("polls", poll.id, poll).catch(console.error);
     res.json({ success: true, poll, state });
   });
 
@@ -2651,7 +2746,6 @@ app.get("/api/stream", (req, res) => {
       state.polls = state.polls.filter(p => p.id !== id);
       saveStateBackup(state);
       saveMainStateToFirestoreThrottled(true);
-      firestoreDelete("polls", id).catch(console.error);
       res.json({ success: true, state });
     } else {
       res.status(404).json({ error: "Không tìm thấy khảo sát ý kiến" });

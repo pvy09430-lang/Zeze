@@ -15,37 +15,19 @@ import { getCachedAppState, setCachedAppState } from "./lib/indexedDbCache";
 
 export default function App() {
   // Global State fetched from the Express backend
-  const [state, setState] = useState<AppState>(() => {
-    try {
-      const backup = localStorage.getItem("cl_portal_local_state_backup");
-      if (backup) {
-        const parsed = JSON.parse(backup);
-        return {
-          bots: parsed.bots || [],
-          announcements: parsed.announcements || [],
-          feedbacks: parsed.feedbacks || [],
-          botRequests: parsed.botRequests || [],
-          polls: parsed.polls || [],
-          authorSettings: parsed.authorSettings || undefined
-        };
-      }
-    } catch (e) {
-      console.warn("Lỗi khi khôi phục trạng thái từ localStorage:", e);
-    }
-    return {
-      bots: [],
-      announcements: [],
-      feedbacks: [],
-      botRequests: [],
-      polls: []
-    };
+  const [state, setState] = useState<AppState>({
+    bots: [],
+    announcements: [],
+    feedbacks: [],
+    botRequests: [],
+    polls: []
   });
 
   // Loading & Sync states
   const [loading, setLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(false);
   
   const [totalClicksSync, setTotalClicksSync] = useState<number>(0);
 
@@ -108,27 +90,6 @@ export default function App() {
 
       setIsStaleFallback(!!data?.isStaleFallback);
 
-      // Save complete state to IndexedDB cache (only if data contains bots or no existing backup to overwrite, and NOT a stale fallback!)
-      if (data && Array.isArray(data.bots) && data.bots.length > 0 && !data.isStaleFallback) {
-        setCachedAppState(data as AppState).catch((err) => {
-          console.warn("Lỗi lưu cache IndexedDB:", err);
-        });
-
-        // Ngay lập tức sao lưu phiên bản thu gọn vào localStorage sau khi tải thành công làm dự phòng phụ
-        try {
-          const strippedBots = data.bots.map((b: any) => {
-            if (b.imageUrl && b.imageUrl.startsWith("data:image/")) {
-              return { ...b, imageUrl: "" };
-            }
-            return b;
-          });
-          const strippedState = { ...data, bots: strippedBots };
-          localStorage.setItem("cl_portal_local_state_backup", JSON.stringify(strippedState));
-        } catch (storageErr) {
-          console.warn("Không thể lưu bản sao lưu do vượt quá giới hạn localStorage:", storageErr);
-        }
-      }
-      
       // Strict data format verification to prevent UI errors
       if (!data || typeof data !== "object") {
         throw new Error("Phản hồi không phải là một đối tượng hợp lệ");
@@ -155,27 +116,6 @@ export default function App() {
         return fetchStateWithRetry(silent, retries - 1, delay * 1.5);
       }
       
-      // Fallback 1: Khôi phục từ IndexedDB (đầy đủ hình ảnh)
-      try {
-        const idbCached = await getCachedAppState();
-        if (idbCached && idbCached.state) {
-          console.warn("Đã khôi phục dữ liệu đầy đủ từ IndexedDB cache...");
-          setIsOffline(true);
-          return idbCached.state;
-        }
-      } catch (idbErr) {
-        console.warn("Không thể đọc từ IndexedDB cache:", idbErr);
-      }
-
-      // Fallback 2: Khôi phục từ localStorage nếu IndexedDB trống
-      const backup = localStorage.getItem("cl_portal_local_state_backup");
-      if (backup) {
-        console.warn("Khôi phục toàn bộ dữ liệu từ localStorage dự phòng...");
-        try {
-          setIsOffline(true);
-          return JSON.parse(backup) as AppState;
-        } catch(e) {}
-      }
       setIsOffline(true);
       throw error;
     }
@@ -271,8 +211,9 @@ export default function App() {
   };
 
   const fetchState = async (silent = false) => {
-    if (!silent) setLoading(true);
-    if (silent) setIsSyncing(true);
+    // Only set full loading screen if we have no state loaded at all yet
+    if (!silent && state.bots.length === 0) setLoading(true);
+    if (silent || state.bots.length > 0) setIsSyncing(true);
     try {
       const rawData = await fetchStateWithRetry(silent);
       const data = deepSanityCheckBots(rawData);
@@ -379,18 +320,7 @@ export default function App() {
     }
   };
 
-  // New: Log user activity helper
-  const logUserActivity = async (action: string) => {
-    try {
-      await fetch("/api/visitor-logs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nickname, action })
-      });
-    } catch (e) {
-      // Silent fail for logs
-    }
-  };
+
 
   // Hàm syncFromFirestore đồng bộ danh sách bots từ Firestore về máy chủ và ứng dụng
   const syncFromFirestore = async () => {
@@ -488,22 +418,10 @@ export default function App() {
       setNsfwAccepted(false);
     }
 
-    // Restore immediately from IndexedDB cache on load for zero-latency startup
-    getCachedAppState().then((cached) => {
-      if (cached && cached.state && Array.isArray(cached.state.bots) && cached.state.bots.length > 0) {
-        setState(cached.state);
-        setLoading(false);
-        // Sync silently in background if we have cached data to prevent blinking/stuttering
-        fetchState(true);
-      } else {
-        fetchState(false);
-      }
-    }).catch((err) => {
-      console.warn("Cached AppState restoration failed:", err);
-      fetchState(false);
-    });
-
     syncClickCount();
+    
+    // Fetch state directly from server
+    fetchState(false);
 
     // Real-Time Sync via Server-Sent Events (ZERO Firestore Reads)
     const eventSource = new EventSource("/api/stream");
@@ -520,75 +438,80 @@ export default function App() {
       console.warn("⚠️ [Real-Time SSE] Connection lost, reconnecting...");
     };
 
-    return () => eventSource.close();
+    // Periodic silent background auto-sync to guarantee multi-user updates across separate instances & browser tabs
+    const pollInterval = setInterval(() => {
+      fetchState(true);
+    }, 12000);
+
+    return () => {
+      eventSource.close();
+      clearInterval(pollInterval);
+    };
   }, []);
 
   // Sync state manually & update IndexedDB cache
-  const deepEqual = (a: any, b: any): boolean => {
+  // Highly optimized state equality checker to completely eliminate thread blocking and UI stuttering
+  const fastStateEqual = (a: any, b: any): boolean => {
     if (a === b) return true;
     if (a == null || b == null) return false;
-    if (typeof a !== 'object' || typeof b !== 'object') return false;
-    if (Array.isArray(a) !== Array.isArray(b)) return false;
-    if (Array.isArray(a)) {
-      if (a.length !== b.length) return false;
-      for (let i = 0; i < a.length; i++) {
-        if (!deepEqual(a[i], b[i])) return false;
+
+    // Direct timestamp check
+    if (a.updatedAt && b.updatedAt && a.updatedAt !== b.updatedAt) return false;
+    if (a.lastUpdated && b.lastUpdated && a.lastUpdated !== b.lastUpdated) return false;
+
+    // Length checks for lists
+    if (a.bots?.length !== b.bots?.length) return false;
+    if (a.feedbacks?.length !== b.feedbacks?.length) return false;
+    if (a.botRequests?.length !== b.botRequests?.length) return false;
+    if (a.announcements?.length !== b.announcements?.length) return false;
+    if (a.polls?.length !== b.polls?.length) return false;
+
+    // Fast check for bots metrics to see if views or likes changed
+    if (a.bots && b.bots) {
+      for (let i = 0; i < a.bots.length; i++) {
+        const botA = a.bots[i];
+        const botB = b.bots[i];
+        if (!botA || !botB) return false;
+        if (botA.id !== botB.id || botA.views !== botB.views || botA.likes !== botB.likes || botA.comments?.length !== botB.comments?.length) {
+          return false;
+        }
       }
-      return true;
     }
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
-    if (keysA.length !== keysB.length) return false;
-    for (let key of keysA) {
-      if (!keysB.includes(key)) return false;
-      if (!deepEqual(a[key], b[key])) return false;
-    }
+
     return true;
   };
 
-  function handleUpdateLocalState(newState: AppState) {
+  function handleUpdateLocalState(
+    newState: AppState,
+    syncOnlyOnChange: boolean = true,
+    diff?: { type: string; id: string; action?: "update" | "delete"; patch?: any }
+  ) {
     if (!newState) return;
+
+    // Sync Only on Change: Skip update if new state is identical to current state
+    if (syncOnlyOnChange && state && fastStateEqual(state, newState)) {
+      return;
+    }
 
     // Timestamp check: Prevent older state from overwriting newer local state
     const currentTs = state?.lastUpdated || (state?.updatedAt ? new Date(state.updatedAt).getTime() : 0);
     const newTs = newState.lastUpdated || (newState.updatedAt ? new Date(newState.updatedAt).getTime() : 0);
     if (currentTs > 0 && newTs > 0 && newTs < currentTs) {
-      console.warn("⚠️ [handleUpdateLocalState] Đã bỏ qua dữ liệu cũ hơn để tránh ghi đè thay đổi mới của người dùng.");
+      console.warn("⚠️ [handleUpdateLocalState] Đã bỏ qua dữ liệu cũ hơn để tránh ghi đè thay đổi mới.");
       return;
-    }
-
-    let strippedBots = newState.bots;
-    if (newState && Array.isArray(newState.bots)) {
-      strippedBots = newState.bots.map((b: any) => {
-        if (b.imageUrl && b.imageUrl.startsWith("data:image/")) {
-          return { ...b, imageUrl: "" };
-        }
-        return b;
-      });
-    }
-    const strippedState = { ...newState, bots: strippedBots, lastUpdated: newTs || Date.now() };
-    
-    try {
-      const newStr = JSON.stringify(strippedState);
-      const oldStr = localStorage.getItem("cl_portal_local_state_backup");
-      
-      if (oldStr) {
-         try {
-            const oldState = JSON.parse(oldStr);
-            if (deepEqual(oldState, strippedState)) {
-               return; // State is identical, prevent loop
-            }
-         } catch(e) {}
-      }
-      
-      localStorage.setItem("cl_portal_local_state_backup", newStr);
-    } catch (e) {
-      console.warn("Không thể lưu bản sao lưu sau cập nhật do vượt quá giới hạn localStorage:", e);
     }
 
     const stateToSet = { ...newState, lastUpdated: newTs || Date.now() };
     setState(stateToSet);
-    setCachedAppState(stateToSet).catch(console.warn);
+
+    // Send small diff patch to server if provided to eliminate full state network overwrites
+    if (diff) {
+      fetch("/api/patch-state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...diff, nickname })
+      }).catch(err => console.warn("Lỗi gửi diff patch:", err));
+    }
   };
 
   const handleAcceptNsfw = () => {
@@ -709,28 +632,18 @@ export default function App() {
           {/* Settings & View Switcher */}
           <div className="flex items-center gap-3">
             
-            {/* Cache Status Indicator & Refresh Button */}
-            {isOffline ? (
-              <div 
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/20 rounded-xl text-amber-600 dark:text-amber-400 font-bold text-[10px] animate-pulse select-none"
-                title="Đang sử dụng dữ liệu từ bộ nhớ đệm IndexedDB (Chế độ ngoại tuyến)"
-              >
-                <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-ping"></span>
-                <span>Ngoại tuyến (IndexedDB)</span>
-              </div>
-            ) : (
-              <button 
-                onClick={() => fetchState()}
-                disabled={isSyncing}
-                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer select-none"
-                title="Nhấp để làm mới dữ liệu từ hệ thống (Dữ liệu đang được lưu trữ đệm IndexedDB)"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 text-cyan-500 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span className="text-[10px] font-bold text-slate-600 dark:text-slate-300 font-mono">
-                  {isSyncing ? "Đang làm mới..." : "IndexedDB Cache"}
-                </span>
-              </button>
-            )}
+            {/* Refresh Button */}
+            <button 
+              onClick={() => fetchState()}
+              disabled={isSyncing}
+              className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer select-none"
+              title="Làm mới dữ liệu từ máy chủ"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-cyan-500 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span className="text-[10px] font-bold text-slate-600 dark:text-slate-300 font-mono">
+                {isSyncing ? "Đang làm mới..." : "Làm mới dữ liệu"}
+              </span>
+            </button>
 
             {/* Dark mode switch */}
             <button
@@ -867,7 +780,7 @@ export default function App() {
               viewMode === "admin" ? (
                 <AdminPanel
                   state={state}
-                  onRefresh={fetchState}
+                  onRefresh={(silent = true) => fetchState(silent)}
                   onUpdateState={handleUpdateLocalState}
                   passcode={passcode}
                   setPasscode={setPasscode}
@@ -880,7 +793,7 @@ export default function App() {
                 ) : (
                   <UserPanel
                     state={state}
-                    onRefresh={fetchState}
+                    onRefresh={(silent = true) => fetchState(silent)}
                     onUpdateState={handleUpdateLocalState}
                     nickname={nickname}
                     avatar={avatar}
@@ -889,7 +802,6 @@ export default function App() {
                     isAdminUnlocked={isAdminUnlocked}
                     passcode={passcode}
                     loading={loading}
-                    logUserActivity={logUserActivity}
                   />
                 )
               } 
