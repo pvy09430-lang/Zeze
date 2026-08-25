@@ -106,52 +106,6 @@ export default function App() {
         throw new Error("Dữ liệu phản hồi từ máy chủ không hợp lệ (Không thể phân giải JSON)");
       }
 
-      // If server returned 0 bots, check if client browser has a local backup to self-heal/restore server
-      if (data && Array.isArray(data.bots) && data.bots.length === 0) {
-        let clientBackup: AppState | null = null;
-        try {
-          const idbCached = await getCachedAppState();
-          if (idbCached && idbCached.state && Array.isArray(idbCached.state.bots) && idbCached.state.bots.length > 0) {
-            clientBackup = idbCached.state;
-          }
-        } catch (e) {}
-
-        if (!clientBackup) {
-          try {
-            const lsBackupStr = localStorage.getItem("cl_portal_local_state_backup");
-            if (lsBackupStr) {
-              const parsed = JSON.parse(lsBackupStr);
-              if (parsed && Array.isArray(parsed.bots) && parsed.bots.length > 0) {
-                clientBackup = parsed;
-              }
-            }
-          } catch (e) {}
-        }
-
-        if (clientBackup && clientBackup.bots.length > 0) {
-          console.log(`⚡ [Client Self-Healing] Server bị trống dữ liệu nhưng phát hiện ${clientBackup.bots.length} Bot trên thiết bị. Tự động khôi phục dữ liệu lên Server...`);
-          try {
-            const restoreRes = await fetch("/api/restore-backup", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(clientBackup)
-            });
-            if (restoreRes.ok) {
-              const restoreJson = await restoreRes.json();
-              if (restoreJson.state && Array.isArray(restoreJson.state.bots) && restoreJson.state.bots.length > 0) {
-                console.log("✅ [Client Self-Healing] Khôi phục dữ liệu thành công lên Server!");
-                setIsOffline(false);
-                return restoreJson.state;
-              }
-            }
-          } catch (restoreErr) {
-            console.warn("Không thể khôi phục lên Server:", restoreErr);
-          }
-          setIsOffline(false);
-          return clientBackup;
-        }
-      }
-
       setIsStaleFallback(!!data?.isStaleFallback);
 
       // Save complete state to IndexedDB cache (only if data contains bots or no existing backup to overwrite, and NOT a stale fallback!)
@@ -230,80 +184,13 @@ export default function App() {
   // Utility function to execute a deep sanity check and repair logic on the bots list
   const deepSanityCheckBots = (currentState: AppState): AppState => {
     try {
-      const backupStr = localStorage.getItem("cl_portal_local_state_backup");
-      let backupState: AppState | null = null;
-      if (backupStr) {
-        try {
-          backupState = JSON.parse(backupStr);
-        } catch {}
-      }
+      if (!currentState || !Array.isArray(currentState.bots)) return currentState;
 
       const repairedBots: Bot[] = currentState.bots.map(bot => {
-        // Ensure likes is a valid number, default 0
         const likes = typeof bot.likes === "number" && !isNaN(bot.likes) ? bot.likes : 0;
-        
-        // Ensure tags is always a valid string array, filter out empty/falsy tags
-        let tags = Array.isArray(bot.tags) ? bot.tags.filter(t => typeof t === "string" && t.trim() !== "") : [];
-        if (tags.length === 0 && backupState) {
-          const bBot = backupState.bots.find(b => b.id === bot.id);
-          if (bBot && Array.isArray(bBot.tags)) {
-            tags = bBot.tags.filter(t => typeof t === "string" && t.trim() !== "");
-          }
-        }
+        const tags = Array.isArray(bot.tags) ? bot.tags.filter(t => typeof t === "string" && t.trim() !== "") : [];
+        const comments = Array.isArray(bot.comments) ? bot.comments : [];
 
-        // Ensure comments is always an array
-        let comments = Array.isArray(bot.comments) ? bot.comments : [];
-
-        // Check if there are any missing comments or likes by comparing to backup
-        if (backupState) {
-          const backupBot = backupState.bots.find(b => b.id === bot.id);
-          if (backupBot) {
-            // Restore comments that exist in backup but not in current state
-            const currentCommentIds = new Set(comments.map(c => c.id));
-            const backupComments = Array.isArray(backupBot.comments) ? backupBot.comments : [];
-            
-            backupComments.forEach(bComm => {
-              if (!currentCommentIds.has(bComm.id)) {
-                // Comment is missing! Auto-restore
-                comments.push(bComm);
-                console.log(`[SanityCheck] Đã khôi phục bình luận của '${bComm.nickname}' trên Bot '${bot.name}' từ bản sao lưu`);
-              } else {
-                // Comment exists, check replies
-                const currentComm = comments.find(c => c.id === bComm.id);
-                if (currentComm) {
-                  const currentReplyIds = new Set((currentComm.replies || []).map(r => r.id));
-                  const backupReplies = Array.isArray(bComm.replies) ? bComm.replies : [];
-                  
-                  if (!currentComm.replies) currentComm.replies = [];
-                  backupReplies.forEach(bRep => {
-                    if (!currentReplyIds.has(bRep.id)) {
-                      currentComm.replies!.push(bRep);
-                      console.log(`[SanityCheck] Đã khôi phục phản hồi của '${bRep.nickname}' trên Bot '${bot.name}' từ bản sao lưu`);
-                    }
-                  });
-                }
-              }
-            });
-
-            // Restore likes count or likedUserIds if backup has more
-            const backupLikes = typeof backupBot.likes === "number" ? backupBot.likes : 0;
-            const finalLikes = Math.max(likes, backupLikes);
-            
-            const backupLikedUsers = Array.isArray(backupBot.likedUserIds) ? backupBot.likedUserIds : [];
-            const currentLikedUsers = Array.isArray(bot.likedUserIds) ? bot.likedUserIds : [];
-            const mergedLikedUsers = Array.from(new Set([...currentLikedUsers, ...backupLikedUsers]));
-
-            return {
-              ...bot,
-              likes: finalLikes,
-              likedUserIds: mergedLikedUsers,
-              tags,
-              comments
-            };
-          }
-        }
-
-        // Just repair basic types if backupBot wasn't found
         return {
           ...bot,
           likes,
@@ -320,7 +207,7 @@ export default function App() {
         bots: repairedBots
       };
     } catch (e) {
-      console.error("[SanityCheck] Lỗi trong quá trình kiểm tra sâu dữ liệu:", e);
+      console.error("[SanityCheck] Lỗi trong quá trình kiểm tra cấu trúc dữ liệu:", e);
       return currentState;
     }
   };
@@ -660,6 +547,16 @@ export default function App() {
   };
 
   function handleUpdateLocalState(newState: AppState) {
+    if (!newState) return;
+
+    // Timestamp check: Prevent older state from overwriting newer local state
+    const currentTs = state?.lastUpdated || (state?.updatedAt ? new Date(state.updatedAt).getTime() : 0);
+    const newTs = newState.lastUpdated || (newState.updatedAt ? new Date(newState.updatedAt).getTime() : 0);
+    if (currentTs > 0 && newTs > 0 && newTs < currentTs) {
+      console.warn("⚠️ [handleUpdateLocalState] Đã bỏ qua dữ liệu cũ hơn để tránh ghi đè thay đổi mới của người dùng.");
+      return;
+    }
+
     let strippedBots = newState.bots;
     if (newState && Array.isArray(newState.bots)) {
       strippedBots = newState.bots.map((b: any) => {
@@ -669,7 +566,7 @@ export default function App() {
         return b;
       });
     }
-    const strippedState = { ...newState, bots: strippedBots };
+    const strippedState = { ...newState, bots: strippedBots, lastUpdated: newTs || Date.now() };
     
     try {
       const newStr = JSON.stringify(strippedState);
@@ -689,8 +586,9 @@ export default function App() {
       console.warn("Không thể lưu bản sao lưu sau cập nhật do vượt quá giới hạn localStorage:", e);
     }
 
-    setState(newState);
-    setCachedAppState(newState).catch(console.warn);
+    const stateToSet = { ...newState, lastUpdated: newTs || Date.now() };
+    setState(stateToSet);
+    setCachedAppState(stateToSet).catch(console.warn);
   };
 
   const handleAcceptNsfw = () => {

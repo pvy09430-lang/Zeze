@@ -295,6 +295,7 @@ function recordFirestoreWrites(count: number, source: string) {
   if (count <= 0) return;
   totalFirestoreWrites += count;
   const now = Date.now();
+  console.log(`✍️ [Firestore Write Log] Nguồn: ${source} | Tiêu thụ: ${count} Write(s) | Tổng số Write trong phiên: ${totalFirestoreWrites}`);
   writeLogsHistory.push({ timestamp: now, writesCount: count, source });
   const oneDayAgo = now - 24 * 3600 * 1000;
   writeLogsHistory = writeLogsHistory.filter(l => l.timestamp >= oneDayAgo);
@@ -1994,6 +1995,7 @@ app.get("/api/stream", (req, res) => {
       if (isAdmin(req) || isAuthor) {
         bot.comments = bot.comments.filter(c => c.id !== commentId);
         saveStateBackup(state);
+        saveMainStateToFirestoreThrottled(true);
         if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
         res.json({ success: true });
       } else {
@@ -2069,6 +2071,7 @@ app.get("/api/stream", (req, res) => {
         if (isAdmin(req) || isReplyAuthor || isCommentAuthor) {
           comment.replies = comment.replies!.filter(r => r.id !== replyId);
           saveStateBackup(state);
+          saveMainStateToFirestoreThrottled(true);
           if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
           res.json({ success: true, comment: comment });
         } else {
@@ -2255,6 +2258,7 @@ app.get("/api/stream", (req, res) => {
 
     state.feedbacks = state.feedbacks.filter(f => f.id !== id);
     saveStateBackup(state);
+    saveMainStateToFirestoreThrottled(true);
     firestoreDelete("feedbacks", id).catch(console.error);
     res.json({ success: true });
   });
@@ -2405,6 +2409,7 @@ app.get("/api/stream", (req, res) => {
     const title = request ? request.title : "yêu cầu";
     state.botRequests = state.botRequests.filter(r => r.id !== id);
     saveStateBackup(state);
+    saveMainStateToFirestoreThrottled(true);
     firestoreDelete("botRequests", id).catch(console.error);
     res.json({ success: true, state });
   });

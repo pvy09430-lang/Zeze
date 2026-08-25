@@ -170,6 +170,8 @@ export interface AppState {
   pendingWritesCount?: number;
   quotaStats?: QuotaStats;
   isStaleFallback?: boolean;
+  updatedAt?: string;
+  lastUpdated?: number;
 }
 
 /**
