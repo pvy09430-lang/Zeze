@@ -1,0 +1,8 @@
+{
+  "name": "Zeze và Những người mẹ trẻ",
+  "description": "Trang web chia sẻ và quản lý link Bot AI cho thể loại GL và Futa, tất cả đều là hàng Nsfw.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

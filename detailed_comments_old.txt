@@ -1,0 +1,196 @@
+                  <div className="flex-1 h-[58%] md:h-full flex flex-col justify-between p-5 md:p-6 space-y-4 overflow-hidden bg-slate-50/30 dark:bg-slate-950/20">
+                    <div className="border-b border-slate-150 dark:border-white/5 pb-3 shrink-0 flex justify-between items-center select-none">
+                      <h4 className="text-xs font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                        <MessageCircle className="w-4 h-4 text-cyan-500" />
+                        <span>Tương tác thảo luận ({getBotCommentCount(detailedBotModal)})</span>
+                      </h4>
+                    </div>
+
+                    {/* Independently Scrollable comment container */}
+                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 space-y-3 min-h-0">
+                      {(!detailedBotModal.comments || detailedBotModal.comments.length === 0) ? (
+                        <div className="text-center py-12 space-y-2">
+                          <span className="text-3xl block">🍶</span>
+                          <p className="text-[11px] text-slate-400 italic">Bình chưa có giọt sữa. Đừng ngần ngại trở thành người mở bát!</p>
+                        </div>
+                      ) : (
+                        detailedBotModal.comments.map((c) => (
+                          <div key={c.id} className={`p-3.5 rounded-2xl border text-[11px] transition-colors duration-200 ${
+                            c.isAdmin
+                              ? "bg-rose-50/80 dark:bg-rose-950/35 border-rose-200/60 dark:border-rose-900/45 text-rose-900 dark:text-rose-100"
+                              : "bg-white dark:bg-slate-900/50 border-slate-150 dark:border-white/5"
+                          }`}>
+                            <div className="flex justify-between items-center flex-wrap gap-1 mb-1.5">
+                              <div className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 flex-wrap">
+                                {c.avatar ? (
+                                  c.avatar.startsWith('data:') ? (
+                                    <img src={c.avatar} alt="avatar" className="w-4 h-4 rounded-full object-cover" />
+                                  ) : (
+                                    <span className="text-xs leading-none">{c.avatar}</span>
+                                  )
+                                ) : null}
+                                <span>{c.nickname}</span>
+                                {(() => {
+                                  const [bId, tText] = (c.userBadge || "").split("||");
+                                  return renderUserBadges(c.nickname, c.isAdmin, tText, bId);
+                                })()}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button 
+                                  onClick={() => handleLikeComment(detailedBotModal.id, c.id)}
+                                  className={`flex items-center gap-0.5 text-[10px] ${c.likedUserIds?.includes(userId) ? 'text-rose-500 font-bold' : 'text-slate-400 hover:text-rose-400'} transition-colors cursor-pointer`}
+                                  title="Thích bình luận này"
+                                >
+                                  <Heart className={`w-3 h-3 ${c.likedUserIds?.includes(userId) ? 'fill-rose-500' : ''}`} />
+                                  {c.likes || 0}
+                                </button>
+                                
+                                {(isAdminUnlocked || (c.userId && c.userId === userId) || (!c.userId && c.nickname === nickname)) && (
+                                  <button
+                                    onClick={() => handleDeleteComment(detailedBotModal.id, c.id)}
+                                    className="text-slate-400 hover:text-red-500 transition-colors p-0.5 rounded cursor-pointer"
+                                    title="Xóa bình luận"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
+                                
+                                <span className="text-[9px] text-slate-400 dark:text-slate-500">{new Date(c.createdAt).toLocaleDateString("vi-VN")}</span>
+                              </div>
+                            </div>
+                            <p className="text-slate-600 dark:text-slate-300 text-justify text-[11.5px] leading-relaxed whitespace-pre-wrap">{c.content}</p>
+
+                            {/* Sub-Replies List */}
+                            {c.replies && c.replies.length > 0 && (
+                              <div className="mt-3 pl-3.5 border-l-2 border-slate-200 dark:border-slate-800 space-y-2.5">
+                                {c.replies.map((reply) => (
+                                  <div key={reply.id} className={`p-2.5 rounded-xl text-[10.5px] border ${
+                                    reply.isAdmin 
+                                      ? "bg-rose-50/50 dark:bg-rose-950/20 border-rose-150 dark:border-rose-900/30 text-rose-900 dark:text-rose-100" 
+                                      : "bg-slate-50/60 dark:bg-slate-950/20 border-slate-150/45 dark:border-white/5 text-slate-600 dark:text-slate-355"
+                                  }`}>
+                                    <div className="flex justify-between items-center flex-wrap gap-1 mb-1.5">
+                                      <div className="font-bold flex items-center gap-1.5 flex-wrap text-slate-700 dark:text-slate-355">
+                                        {reply.avatar ? (
+                                          reply.avatar.startsWith('data:') ? (
+                                            <img src={reply.avatar} alt="avatar" className="w-3.5 h-3.5 rounded-full object-cover" />
+                                          ) : (
+                                            <span className="text-[11px] leading-none">{reply.avatar}</span>
+                                          )
+                                        ) : null}
+                                        <span>{reply.nickname}</span>
+                                        {(() => {
+                                          const [bId, tText] = (reply.userBadge || "").split("||");
+                                          return renderUserBadges(reply.nickname, reply.isAdmin, tText, bId);
+                                        })()}
+                                      </div>
+                                      <div className="flex items-center gap-1.5">
+                                        {(isAdminUnlocked || 
+                                          (reply.userId && reply.userId === userId) || 
+                                          (!reply.userId && reply.nickname === nickname) ||
+                                          (c.userId && c.userId === userId) ||
+                                          (!c.userId && c.nickname === nickname)) && (
+                                          <button
+                                            onClick={() => handleDeleteCommentReply(detailedBotModal.id, c.id, reply.id)}
+                                            className="text-slate-455 hover:text-red-500 transition-colors p-0.5 rounded cursor-pointer"
+                                            title="Xóa phản hồi"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                          </button>
+                                        )}
+                                        <span className="text-[8px] text-slate-400">{new Date(reply.createdAt).toLocaleDateString("vi-VN")}</span>
+                                      </div>
+                                    </div>
+                                    <p className="text-justify text-slate-650 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">{reply.content}</p>
+                                    <div className="mt-1.5 flex items-center gap-2">
+                                      <button
+                                        onClick={() => {
+                                          setActiveCommentReplyId(c.id);
+                                          const currentText = commentReplyInput[c.id] || "";
+                                          const cleanText = currentText.startsWith(`@${reply.nickname}`) 
+                                            ? currentText 
+                                            : `@${reply.nickname} ` + currentText.replace(/^@[^\s]+\s*/, "");
+                                          setCommentReplyInput({
+                                            ...commentReplyInput,
+                                            [c.id]: cleanText
+                                          });
+                                        }}
+                                        className="text-[9px] text-cyan-600 dark:text-cyan-400 hover:underline font-bold cursor-pointer"
+                                      >
+                                        Trả lời
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Action Link Row */}
+                            <div className="mt-2 flex items-center gap-2 border-t border-slate-100/50 dark:border-slate-800/40 pt-1.5">
+                              <button
+                                onClick={() => setActiveCommentReplyId(activeCommentReplyId === c.id ? null : c.id)}
+                                className="text-[10px] text-cyan-600 dark:text-cyan-400 hover:underline font-bold flex items-center gap-0.5 cursor-pointer"
+                              >
+                                💬 Trả lời
+                              </button>
+                            </div>
+
+                            {/* Comment Sub-Reply input block */}
+                            {activeCommentReplyId === c.id && (
+                              <div className="mt-2.5 flex gap-1.5 items-center animate-fade-in pl-1">
+                                <input
+                                  type="text"
+                                  maxLength={120}
+                                  placeholder={`Phản hồi lại ${c.nickname}...`}
+                                  value={commentReplyInput[c.id] || ""}
+                                  onChange={(e) => setCommentReplyInput({ ...commentReplyInput, [c.id]: e.target.value })}
+                                  className="flex-1 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/5 bg-white dark:bg-slate-900 text-[10.5px] dark:text-white focus:outline-none focus:ring-1 focus:ring-cyan-500 shadow-sm"
+                                />
+                                <button
+                                  onClick={() => handlePostCommentReply(detailedBotModal.id, c.id)}
+                                  className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl text-[9.5px] font-bold transition cursor-pointer"
+                                >
+                                  Gửi
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Bottom sticky Comment box */}
+                    <div className="border-t border-slate-150 dark:border-white/5 pt-3 shrink-0 bg-transparent">
+                      <form 
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          const text = commentInput[detailedBotModal.id];
+                          if (!text || !text.trim()) return;
+                          // Trigger post comment natively with silent reload
+                          await handlePostComment(detailedBotModal.id, e);
+                          // Update modal comment state synchronously to reflect changes
+                          const response = await fetch(`/api/bots/${detailedBotModal.id}`);
+                          if (response.ok) {
+                            const updatedBot = await response.json();
+                            setDetailedBotModal(updatedBot);
+                          }
+                        }} 
+                        className="flex gap-2"
+                      >
+                        <input
+                          type="text"
+                          placeholder="Nhập suy nghĩ bàn tính của bạn về bot..."
+                          value={commentInput[detailedBotModal.id] || ""}
+                          onChange={(e) => setCommentInput({ ...commentInput, [detailedBotModal.id]: e.target.value })}
+                          className="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-white/5 bg-white dark:bg-slate-950 text-xs dark:text-white focus:outline-none focus:ring-1 focus:ring-cyan-500 shadow-sm"
+                        />
+                        <button
+                          type="submit"
+                          className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center shrink-0 cursor-pointer shadow active:scale-[0.96]"
+                        >
+                          Bình luận
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                </>

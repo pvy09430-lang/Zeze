@@ -1,0 +1,165 @@
+{
+  "entities": {
+    "Bot": {
+      "title": "Bot",
+      "description": "Represents a custom visual or chat GL/Futa Bot share details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["GL", "Futa"] },
+        "tags": { "type": "array" },
+        "authorNote": { "type": "string" },
+        "links": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "views": { "type": "integer" },
+        "comments": { "type": "array" }
+      },
+      "required": ["id", "name", "type", "tags", "authorNote", "links", "createdAt", "views"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Author announcement entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "content", "createdAt"]
+    },
+    "Feedback": {
+      "title": "Feedback",
+      "description": "User feedback and review submission details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nickname": { "type": "string" },
+        "isAnonymous": { "type": "boolean" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "reply": { "type": "string" }
+      },
+      "required": ["id", "nickname", "isAnonymous", "content", "createdAt"]
+    },
+    "BotRequest": {
+      "title": "BotRequest",
+      "description": "User requests for future bot creations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nickname": { "type": "string" },
+        "title": { "type": "string" },
+        "type": { "type": "string", "enum": ["GL", "Futa"] },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "votes": { "type": "integer" },
+        "votedUserIds": { "type": "array" },
+        "reply": { "type": "string" },
+        "status": { "type": "string" },
+        "userReplies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "nickname": { "type": "string" },
+              "content": { "type": "string" },
+              "createdAt": { "type": "string" },
+              "isAdmin": { "type": "boolean" }
+            },
+            "required": ["id", "nickname", "content", "createdAt"]
+          }
+        }
+      },
+      "required": ["id", "nickname", "title", "type", "description", "createdAt", "votes"]
+    },
+    "VisitorLog": {
+      "title": "VisitorLog",
+      "description": "Action log entry of standard users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nickname": { "type": "string" },
+        "action": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "userAgent": { "type": "string" }
+      },
+      "required": ["id", "nickname", "action", "timestamp"]
+    },
+    "AuthorSettings": {
+      "title": "AuthorSettings",
+      "description": "Global customization details for Zeze's site",
+      "type": "object",
+      "properties": {
+        "authorName": { "type": "string" },
+        "welcomeTitle": { "type": "string" },
+        "welcomeSubtitle": { "type": "string" },
+        "welcomeIntro": { "type": "string" },
+        "facebookUrl": { "type": "string" },
+        "discordUrl": { "type": "string" }
+      },
+      "required": ["authorName", "welcomeTitle", "welcomeSubtitle", "welcomeIntro"]
+    },
+    "Poll": {
+      "title": "Poll",
+      "description": "Interactive user interest survey polls",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "question": { "type": "string" },
+        "options": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "votedUsers": { "type": "object" }
+      },
+      "required": ["id", "question", "options", "createdAt", "votedUsers"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Represents registered user identity and login credentials",
+      "type": "object",
+      "properties": {
+        "nickname": { "type": "string" },
+        "avatar": { "type": "string" },
+        "password": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["nickname", "avatar", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/bots/{botId}": {
+      "schema": { "$ref": "#/entities/Bot" },
+      "description": "Collection of all GL and Futa bot links shared on site"
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/Announcement" },
+      "description": "Collection of author updates and system news"
+    },
+    "/feedbacks/{feedbackId}": {
+      "schema": { "$ref": "#/entities/Feedback" },
+      "description": "Collection of visitor reviews, questions or general feedback"
+    },
+    "/botRequests/{botRequestId}": {
+      "schema": { "$ref": "#/entities/BotRequest" },
+      "description": "Collection of suggested bots submitted by users"
+    },
+    "/visitorLogs/{logId}": {
+      "schema": { "$ref": "#/entities/VisitorLog" },
+      "description": "User engagement metrics and logs"
+    },
+    "/global/authorSettings": {
+      "schema": { "$ref": "#/entities/AuthorSettings" },
+      "description": "Primary personalization data document"
+    },
+    "/polls/{pollId}": {
+      "schema": { "$ref": "#/entities/Poll" },
+      "description": "Interactive crowd-sourced voting polls"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Registered user credentials and profile details"
+    }
+  }
+}

@@ -1,0 +1,164 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Custom Sea Wave Animations */
+@keyframes wave-flow {
+  0% {
+    transform: translateX(0) translateZ(0) scaleY(1);
+  }
+  50% {
+    transform: translateX(-25%) translateZ(0) scaleY(0.85);
+  }
+  100% {
+    transform: translateX(-50%) translateZ(0) scaleY(1);
+  }
+}
+
+@keyframes float-gentle {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-8px) rotate(1deg);
+  }
+}
+
+.animate-wave-slow {
+  animation: wave-flow 25s infinite linear;
+}
+
+.animate-wave-medium {
+  animation: wave-flow 15s infinite linear;
+}
+
+.animate-float-slow {
+  animation: float-gentle 12s ease-in-out infinite;
+}
+
+/* Custom scrollbars matching ocean blue palette */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(14, 116, 144, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(14, 116, 144, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(14, 116, 144, 0.5);
+}
+
+/* Dark mode transitions */
+body {
+  transition: background-color 0.3s ease, color 0.3s ease;
+  font-family: var(--font-sans);
+}
+
+/* Background grid overlay */
+.bg-grid {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(14, 116, 144, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(14, 116, 144, 0.03) 1px, transparent 1px);
+}
+
+.dark .bg-grid {
+  background-image: 
+    linear-gradient(to right, rgba(56, 189, 248, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(56, 189, 248, 0.02) 1px, transparent 1px);
+}
+
+@keyframes vibrate-subtle {
+  0%, 100% {
+    transform: rotate(0deg) scale(1) translate(0, 0);
+  }
+  15% {
+    transform: rotate(4deg) scale(1.08) translate(-1px, 0.5px);
+  }
+  30% {
+    transform: rotate(-4deg) scale(1.08) translate(1px, -0.5px);
+  }
+  45% {
+    transform: rotate(3deg) scale(1.08) translate(-0.5px, 0.5px);
+  }
+  60% {
+    transform: rotate(-3deg) scale(1.08) translate(0.5px, -0.5px);
+  }
+  75% {
+    transform: rotate(2deg) scale(1.08) translate(-0.5px, 0px);
+  }
+  90% {
+    transform: rotate(-2deg) scale(1.08) translate(0.5px, 0.5px);
+  }
+}
+
+.animate-vibrate-gentle {
+  animation: vibrate-subtle 0.8s infinite ease-in-out;
+}
+
+/* Custom falling cherry blossom petals */
+@keyframes cherry-fall {
+  0% {
+    transform: translateY(0) translateX(0) rotate(0deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateY(110vh) translateX(150px) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+.animate-cherry-fall {
+  animation: cherry-fall 14s linear infinite;
+}
+
+@keyframes ripple-effect {
+  from {
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 0.6;
+  }
+  to {
+    transform: translate(-50%, -50%) scale(4.5);
+    opacity: 0;
+  }
+}
+
+@keyframes pop-in {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-pop-in {
+  animation: pop-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+
