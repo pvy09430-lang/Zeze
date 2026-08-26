@@ -605,14 +605,6 @@ export default function App() {
 
           {/* Header Navigation Links */}
           <div className="flex flex-wrap items-center justify-center gap-2">
-            <button 
-              onClick={() => syncFromFirestore()}
-              className="p-1 px-3 rounded-lg bg-pink-500/10 hover:bg-pink-600 hover:text-white text-pink-700 dark:text-pink-400 dark:hover:text-white transition cursor-pointer flex items-center gap-1.5 text-xs font-bold border border-pink-500/10"
-              title="Đồng bộ thủ công"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Đồng bộ</span>
-            </button>
             <Link 
               to="/" 
               className="p-1 px-3 rounded-lg bg-pink-500/10 hover:bg-pink-600 hover:text-white text-pink-700 dark:text-pink-400 dark:hover:text-white transition cursor-pointer flex items-center gap-1.5 text-xs font-bold border border-pink-500/10"
@@ -632,19 +624,6 @@ export default function App() {
           {/* Settings & View Switcher */}
           <div className="flex items-center gap-3">
             
-            {/* Refresh Button */}
-            <button 
-              onClick={() => fetchState()}
-              disabled={isSyncing}
-              className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer select-none"
-              title="Làm mới dữ liệu từ máy chủ"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-cyan-500 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span className="text-[10px] font-bold text-slate-600 dark:text-slate-300 font-mono">
-                {isSyncing ? "Đang làm mới..." : "Làm mới dữ liệu"}
-              </span>
-            </button>
-
             {/* Dark mode switch */}
             <button
               onClick={toggleDarkMode}

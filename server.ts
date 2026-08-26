@@ -672,20 +672,14 @@ function flushViewsToFirestore() {
   const entries = Object.entries(viewsBuffer);
   if (entries.length === 0) return;
 
-  console.log(`📊 [Views Buffer] Flushing accumulated views for ${entries.length} bots to Firestore...`);
+  console.log(`📊 [Views Buffer] Flushing accumulated views for ${entries.length} bots via throttled consolidated mainState backup...`);
   for (const [id, count] of entries) {
     if (count > 0) {
-      delete viewsBuffer[id]; // Clear first to avoid race conditions
-      updateDoc(doc(database, "bots", id), { views: increment(count) })
-        .then(() => {
-          console.log(`📊 [Views Buffer] Successfully flushed +${count} views to bot ${id}`);
-        })
-        .catch((err) => {
-          console.warn(`📊 [Views Buffer] Failed to flush views for bot ${id}, restoring count:`, err.message);
-          viewsBuffer[id] = (viewsBuffer[id] || 0) + count; // Restore count on failure
-        });
+      delete viewsBuffer[id]; // Clear buffer
     }
   }
+  // Save the entire updated memory state to Firestore in a single batched operations (4 documents total instead of N!)
+  saveMainStateToFirestoreThrottled(false);
 }
 
 // Automatically flush buffered views to Firestore every 3 minutes
@@ -738,6 +732,50 @@ function loadStateLocalOnly(): AppState {
 
 // saveMainStateToFirestore removed to prevent data overwrite and quota exhaustion
 
+function sanitizeBase64(str: string | undefined): string {
+  if (str && str.startsWith("data:image/")) {
+    return "";
+  }
+  return str || "";
+}
+
+const sanitizeBot = (b: Bot): Bot => {
+  return {
+    ...b,
+    imageUrl: sanitizeBase64(b.imageUrl),
+    comments: (b.comments || []).map(c => ({
+      ...c,
+      avatar: sanitizeBase64(c.avatar),
+      replies: (c.replies || []).map(r => ({
+        ...r,
+        avatar: sanitizeBase64(r.avatar)
+      }))
+    }))
+  };
+};
+
+const sanitizeFeedback = (f: any): any => {
+  return {
+    ...f,
+    avatar: sanitizeBase64(f.avatar),
+    replies: (f.replies || []).map((r: any) => ({
+      ...r,
+      avatar: sanitizeBase64(r.avatar)
+    }))
+  };
+};
+
+const sanitizeBotRequest = (r: any): any => {
+  return {
+    ...r,
+    avatar: sanitizeBase64(r.avatar),
+    userReplies: (r.userReplies || []).map((ur: any) => ({
+      ...ur,
+      avatar: sanitizeBase64(ur.avatar)
+    }))
+  };
+};
+
 // Helper function to load state on startup from Firestore with smart local merge
 async function loadStateFromFirestore(force = false): Promise<AppState> {
   let localState = loadStateLocalOnly();
@@ -749,7 +787,7 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
   }
 
   // Caching tuyệt đối: Chỉ đọc từ Firestore lần đầu (cold-start) hoặc khi Admin bấm Sync.
-  if (!force && state) {
+  if (!force && state && isFirestoreLoaded) {
     console.log("⚡ [In-Memory Caching] Trả về dữ liệu trực tiếp từ RAM, không gọi Firestore.");
     return state;
   }
@@ -757,31 +795,71 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
   try {
     console.log("Starting state restoration from Firestore and merging with local backup...");
 
-    let mainStateDoc: any = null;
     let loadedFromMainState = false;
     let mainStateData: any = null;
 
-    // Load consolidated mainState. Since Cloudinary is active, images are light URLs, fitting safely under 1MB limit.
+    // 1. Try to load from Split Consolidated Documents under appData (to prevent 1MB limit errors)
     try {
-      const mainStateRef = doc(database, "appData", "mainState");
-      mainStateDoc = await getDoc(mainStateRef);
-      recordFirestoreReads(1, "Consolidated mainState Loading");
-      if (mainStateDoc.exists()) {
-        mainStateData = mainStateDoc.data();
-        if (mainStateData && Array.isArray(mainStateData.bots) && mainStateData.bots.length > 0) {
-          console.log(`⚡ [Consolidated Loading Mode] Loaded all ${mainStateData.bots.length} bots from a single Firestore document (1 read operation instead of 41+)!`);
+      const botsRef = doc(database, "appData", "mainState_bots");
+      const feedbacksRef = doc(database, "appData", "mainState_feedbacks");
+      const requestsRef = doc(database, "appData", "mainState_botRequests");
+      const metaRef = doc(database, "appData", "mainState_metadata");
+
+      const [botsDoc, feedbacksDoc, requestsDoc, metaDoc] = await Promise.all([
+        getDoc(botsRef),
+        getDoc(feedbacksRef),
+        getDoc(requestsRef),
+        getDoc(metaRef)
+      ]);
+      recordFirestoreReads(4, "Split Consolidated mainState Loading");
+
+      if (botsDoc.exists()) {
+        const botsData = botsDoc.data();
+        const feedbacksData = feedbacksDoc.exists() ? feedbacksDoc.data() : {};
+        const requestsData = requestsDoc.exists() ? requestsDoc.data() : {};
+        const metaData = metaDoc.exists() ? metaDoc.data() : {};
+
+        mainStateData = {
+          bots: botsData.bots || [],
+          feedbacks: feedbacksData.feedbacks || [],
+          botRequests: requestsData.botRequests || [],
+          announcements: metaData.announcements || [],
+          authorSettings: metaData.authorSettings || {},
+          polls: metaData.polls || [],
+          visitorLogs: []
+        };
+
+        if (Array.isArray(mainStateData.bots) && mainStateData.bots.length > 0) {
+          console.log(`⚡ [Split Consolidated Loading] Successfully loaded all ${mainStateData.bots.length} bots from 4 split appData documents!`);
           loadedFromMainState = true;
         }
       }
-      
-      // FORCED RECOVERY: If we are empty, force read from individual collections
-      if (!loadedFromMainState || (mainStateData && mainStateData.bots && mainStateData.bots.length === 0)) {
-         console.warn("⚠️ FORCED RECOVERY: mainState is empty or missing, falling back to individual collections!");
-         loadedFromMainState = false;
-      }
     } catch (e: any) {
-      console.warn("⚠️ Consolidated mainState could not be read, falling back to multi-collection slow read path:", e.message);
-      loadedFromMainState = false;
+      console.warn("⚠️ Split consolidated loading failed, falling back to legacy single-document mainState:", e.message);
+    }
+
+    // 2. Backward Compatibility: Fallback to reading the legacy single appData/mainState doc
+    if (!loadedFromMainState) {
+      try {
+        const mainStateRef = doc(database, "appData", "mainState");
+        const mainStateDoc = await getDoc(mainStateRef);
+        recordFirestoreReads(1, "Consolidated mainState Loading");
+        if (mainStateDoc.exists()) {
+          mainStateData = mainStateDoc.data();
+          if (mainStateData && Array.isArray(mainStateData.bots) && mainStateData.bots.length > 0) {
+            console.log(`⚡ [Legacy Consolidated Loading Mode] Loaded all ${mainStateData.bots.length} bots from a single legacy Firestore document!`);
+            loadedFromMainState = true;
+          }
+        }
+      } catch (e: any) {
+        console.warn("⚠️ Legacy consolidated mainState could not be read:", e.message);
+      }
+    }
+
+    // Forced collection path fallback if consolidate loading is completely empty or unsuccessful
+    if (!loadedFromMainState || (mainStateData && mainStateData.bots && mainStateData.bots.length === 0)) {
+       console.warn("⚠️ [Restoration Notice] Consolidated backups empty/unavailable. Falling back to multi-collection slow read path.");
+       loadedFromMainState = false;
     }
 
     if (loadedFromMainState) {
@@ -1084,8 +1162,14 @@ async function loadStateFromFirestore(force = false): Promise<AppState> {
 
     console.log(`Success! Smart Merged: ${bots.length} Bots, ${announcements.length} Announcements, ${feedbacks.length} Feedbacks, ${botRequests.length} Bot Requests, ${polls.length} Polls, ${visitorLogs.length} Visitor Logs.`);
 
-    isFirestoreLoaded = true;
-    lastFirestoreReadTime = Date.now();
+    if (firestoreBots.length > 0) {
+      isFirestoreLoaded = true;
+      lastFirestoreReadTime = Date.now();
+      console.log("✅ [Fallback Restoration] Successfully loaded bots from individual collections. Firestore is active.");
+    } else {
+      isFirestoreLoaded = false;
+      console.warn("⚠️ [Fallback Restoration] No bots found in individual collections. Keeping isFirestoreLoaded as false to protect Firestore from overwrites.");
+    }
     const totalReads = 2 + firestoreBots.length + firestoreAnnouncements.length + firestoreFeedbacks.length + firestoreRequests.length + firestorePolls.length;
     recordFirestoreReads(totalReads, "Cloud Sync (Fallback)");
 
@@ -1121,8 +1205,8 @@ let lastMainStateSyncTime = 0;
 
 function saveMainStateToFirestoreThrottled(force = false) {
   const now = Date.now();
-  if (!force && now - lastMainStateSyncTime < 10 * 1000) {
-    return; // Sync at most once every 10 seconds unless forced
+  if (!force && now - lastMainStateSyncTime < 3 * 60 * 1000) {
+    return; // Sync at most once every 3 minutes unless forced
   }
 
   const database = getDb();
@@ -1135,32 +1219,31 @@ function saveMainStateToFirestoreThrottled(force = false) {
   }
 
   lastMainStateSyncTime = now;
-  console.log("☁️ [Consolidated Cloud Backup] Syncing consolidated mainState to Firestore...");
+  console.log("☁️ [Consolidated Cloud Backup] Syncing split consolidated mainState to Firestore...");
 
-  const sanitizedBots = state.bots.map((b) => {
-    if (b.imageUrl && b.imageUrl.startsWith("data:image/")) {
-      return { ...b, imageUrl: "" };
-    }
-    return b;
-  });
+  const sanitizedBots = state.bots.map(sanitizeBot);
+  const sanitizedFeedbacks = (state.feedbacks || []).map(sanitizeFeedback);
+  const sanitizedBotRequests = (state.botRequests || []).map(sanitizeBotRequest);
+  const updatedAt = new Date().toISOString();
 
-  const mainStateData = {
-    bots: sanitizedBots,
-    announcements: state.announcements || [],
-    feedbacks: state.feedbacks || [],
-    botRequests: state.botRequests || [],
-    authorSettings: state.authorSettings || {},
-    polls: state.polls || [],
-    visitorLogs: [], // Zero Firestore quota used for visitor logs
-    updatedAt: new Date().toISOString()
-  };
-
-  setDoc(doc(database, "appData", "mainState"), mainStateData)
+  // Save to 4 split documents to stay safely under 1MB Firestore limits
+  Promise.all([
+    setDoc(doc(database, "appData", "mainState_bots"), { bots: sanitizedBots, updatedAt }),
+    setDoc(doc(database, "appData", "mainState_feedbacks"), { feedbacks: sanitizedFeedbacks, updatedAt }),
+    setDoc(doc(database, "appData", "mainState_botRequests"), { botRequests: sanitizedBotRequests, updatedAt }),
+    setDoc(doc(database, "appData", "mainState_metadata"), {
+      announcements: state.announcements || [],
+      authorSettings: state.authorSettings || {},
+      polls: state.polls || [],
+      visitorLogs: [],
+      updatedAt
+    })
+  ])
     .then(() => {
-      console.log(`✅ [Consolidated Cloud Backup] Successfully backed up complete state to appData/mainState in Firestore!`);
+      console.log(`✅ [Consolidated Cloud Backup] Successfully backed up complete state across 4 split appData documents in Firestore!`);
     })
     .catch((err) => {
-      console.warn("⚠️ [Consolidated Cloud Backup] Failed to backup mainState to Firestore:", err.message);
+      console.warn("⚠️ [Consolidated Cloud Backup] Failed to backup split mainState documents to Firestore:", err.message);
     });
 }
 
@@ -1176,48 +1259,35 @@ async function flushRAMToFirestore(): Promise<void> {
 
   console.log("⚡ [RAM Flush] Cloud Run container shutting down (SIGTERM/SIGINT). Flushing in-memory state & buffered views to Firestore...");
 
-  // 1. Flush buffered views synchronously
+  // 1. Clear buffered views (since they are already in state.bots and will be saved in consolidated mainState_bots below)
   const entries = Object.entries(viewsBuffer);
-  if (entries.length > 0) {
-    console.log(`📊 [RAM Flush] Flushing ${entries.length} buffered bot views...`);
-    for (const [id, count] of entries) {
-      if (count > 0) {
-        delete viewsBuffer[id];
-        try {
-          await updateDoc(doc(database, "bots", id), { views: increment(count) });
-          console.log(`📊 [RAM Flush] Successfully flushed +${count} views to bot ${id}`);
-        } catch (e: any) {
-          console.error(`📊 [RAM Flush] Failed to flush views for bot ${id}:`, e.message);
-        }
-      }
-    }
+  for (const [id, count] of entries) {
+    delete viewsBuffer[id];
   }
 
-  // 2. Flush mainState to Firestore appData/mainState
+  // 2. Flush mainState to Firestore split documents
   if (state.bots && state.bots.length > 0) {
-    const sanitizedBots = state.bots.map((b) => {
-      if (b.imageUrl && b.imageUrl.startsWith("data:image/")) {
-        return { ...b, imageUrl: "" };
-      }
-      return b;
-    });
-
-    const mainStateData = {
-      bots: sanitizedBots,
-      announcements: state.announcements || [],
-      feedbacks: state.feedbacks || [],
-      botRequests: state.botRequests || [],
-      authorSettings: state.authorSettings || {},
-      polls: state.polls || [],
-      visitorLogs: [],
-      updatedAt: new Date().toISOString()
-    };
+    const sanitizedBots = state.bots.map(sanitizeBot);
+    const sanitizedFeedbacks = (state.feedbacks || []).map(sanitizeFeedback);
+    const sanitizedBotRequests = (state.botRequests || []).map(sanitizeBotRequest);
+    const updatedAt = new Date().toISOString();
 
     try {
-      await setDoc(doc(database, "appData", "mainState"), mainStateData);
-      console.log("✅ [RAM Flush] Successfully saved complete mainState to Firestore appData/mainState before exit!");
+      await Promise.all([
+        setDoc(doc(database, "appData", "mainState_bots"), { bots: sanitizedBots, updatedAt }),
+        setDoc(doc(database, "appData", "mainState_feedbacks"), { feedbacks: sanitizedFeedbacks, updatedAt }),
+        setDoc(doc(database, "appData", "mainState_botRequests"), { botRequests: sanitizedBotRequests, updatedAt }),
+        setDoc(doc(database, "appData", "mainState_metadata"), {
+          announcements: state.announcements || [],
+          authorSettings: state.authorSettings || {},
+          polls: state.polls || [],
+          visitorLogs: [],
+          updatedAt
+        })
+      ]);
+      console.log("✅ [RAM Flush] Successfully saved split mainState documents to Firestore before exit!");
     } catch (err: any) {
-      console.error("❌ [RAM Flush] Failed to flush mainState to Firestore:", err.message);
+      console.error("❌ [RAM Flush] Failed to flush split mainState documents to Firestore:", err.message);
     }
   }
 }
@@ -1237,18 +1307,68 @@ process.on("SIGINT", () => handleShutdown("SIGINT"));
 
 function saveStateBackup(state: AppState) {
   broadcastStateUpdate(); // Real-time push to all online clients
-  pendingSaveState = state;
-  if (saveTimeout) {
+  performSave(state);
+  // Force an IMMEDIATE sync to Firestore for all active user operations (creates/deletes/voting/etc)
+  saveMainStateToFirestoreThrottled(true);
+}
+
+let saveLocalTimeout: NodeJS.Timeout | null = null;
+let isSavingLocal = false;
+let pendingSaveLocalState: AppState | null = null;
+
+function saveStateBackupLocallyOnly(state: AppState) {
+  broadcastStateUpdate(); // Real-time push to all online clients
+  pendingSaveLocalState = state;
+  if (saveLocalTimeout) {
     return; // Already scheduled to save soon
   }
 
   // Schedule a save in 2000ms to throttle high-frequency writes
-  saveTimeout = setTimeout(() => {
-    saveTimeout = null;
-    if (pendingSaveState) {
-      performSave(pendingSaveState);
+  saveLocalTimeout = setTimeout(() => {
+    saveLocalTimeout = null;
+    if (pendingSaveLocalState) {
+      performSaveLocallyOnly(pendingSaveLocalState);
     }
   }, 2000);
+}
+
+function performSaveLocallyOnly(state: AppState) {
+  if (isSavingLocal) {
+    saveStateBackupLocallyOnly(state);
+    return;
+  }
+
+  // Safety Shield: Protect existing db.json from being overwritten by an empty state
+  try {
+    if (Array.isArray(state.bots) && state.bots.length === 0 && fs.existsSync(DB_FILE)) {
+      const existingStr = fs.readFileSync(DB_FILE, "utf-8");
+      const existingJson = JSON.parse(existingStr);
+      if (existingJson && Array.isArray(existingJson.bots) && existingJson.bots.length > 0) {
+        console.warn("⚠️ [Safety Shield Local] Ngăn chặn ghi đè db.json bằng dữ liệu mảng Bot rỗng!");
+        isSavingLocal = false;
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn("Safety check read error:", err);
+  }
+
+  isSavingLocal = true;
+  pendingSaveLocalState = null;
+  const data = JSON.stringify(state, null, 2);
+
+  fs.writeFile(DB_FILE, data, "utf-8", (err) => {
+    isSavingLocal = false;
+    if (err) {
+      console.error("Error saving local only backup:", err);
+    } else {
+      console.log(`💾 Local-only backup state saved successfully (${data.length} bytes).`);
+    }
+
+    if (pendingSaveLocalState) {
+      performSaveLocallyOnly(pendingSaveLocalState);
+    }
+  });
 }
 
 function performSave(state: AppState) {
@@ -1986,7 +2106,7 @@ app.get("/api/stream", (req, res) => {
     if (bot) {
       if (typeof bot.views !== 'number') bot.views = 0;
       bot.views += 1;
-      saveStateBackup(state);
+      saveStateBackupLocallyOnly(state);
       
       // Buffer the view increment to flush as a single batched operation later
       viewsBuffer[id] = (viewsBuffer[id] || 0) + 1;
@@ -2024,18 +2144,18 @@ app.get("/api/stream", (req, res) => {
       
       saveStateBackup(state);
       
-      // Atomic increment & array manipulation on Cloud
-      try {
-        const database = getDb();
-        if (database) {
-          updateDoc(doc(database, "bots", bot.id), {
-            likes: increment(isLiking ? 1 : -1),
-            likedUserIds: isLiking ? arrayUnion(identifier) : arrayRemove(identifier)
-          }).catch(console.error);
-        }
-      } catch (e) {
-        console.warn("Could not update likes on Firestore:", e);
-      }
+      // Atomic increment & array manipulation on Cloud (handled by consolidated backup)
+      // try {
+      //   const database = getDb();
+      //   if (database) {
+      //     updateDoc(doc(database, "bots", bot.id), {
+      //       likes: increment(isLiking ? 1 : -1),
+      //       likedUserIds: isLiking ? arrayUnion(identifier) : arrayRemove(identifier)
+      //     }).catch(console.error);
+      //   }
+      // } catch (e) {
+      //   console.warn("Could not update likes on Firestore:", e);
+      // }
       
       res.json({ success: true, likes: bot.likes, likedUserIds: bot.likedUserIds });
     } else {
@@ -2077,7 +2197,7 @@ app.get("/api/stream", (req, res) => {
       bot.comments.push(newComment);
       
       saveStateBackup(state);
-      if (getDb()) updateDoc(doc(getDb(), "bots", bot.id), { comments: bot.comments }).catch(console.error);
+      // if (getDb()) updateDoc(doc(getDb(), "bots", bot.id), { comments: bot.comments }).catch(console.error);
       res.json({ success: true, comment: newComment });
     } else {
       res.status(404).json({ error: "Không tìm thấy Bot" });
@@ -2103,7 +2223,7 @@ app.get("/api/stream", (req, res) => {
         bot.comments = bot.comments.filter(c => c.id !== commentId);
         saveStateBackup(state);
         saveMainStateToFirestoreThrottled(true);
-        if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
+        // if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
         res.json({ success: true });
       } else {
         res.status(403).json({ error: "Bạn không có quyền xóa bình luận này!" });
@@ -2146,7 +2266,7 @@ app.get("/api/stream", (req, res) => {
         comment.replies.push(newReply);
 
         saveStateBackup(state);
-        if (getDb()) updateDoc(doc(getDb(), "bots", bot.id), { comments: bot.comments }).catch(console.error);
+        // if (getDb()) updateDoc(doc(getDb(), "bots", bot.id), { comments: bot.comments }).catch(console.error);
         res.json({ success: true, reply: newReply, comment: comment });
       } else {
         res.status(404).json({ error: "Không tìm thấy bình luận" });
@@ -2179,7 +2299,7 @@ app.get("/api/stream", (req, res) => {
           comment.replies = comment.replies!.filter(r => r.id !== replyId);
           saveStateBackup(state);
           saveMainStateToFirestoreThrottled(true);
-          if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
+          // if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
           res.json({ success: true, comment: comment });
         } else {
           res.status(403).json({ error: "Bạn không có quyền xóa câu trả lời này!" });
@@ -2217,7 +2337,7 @@ app.get("/api/stream", (req, res) => {
         }
         saveStateBackup(state);
         saveMainStateToFirestoreThrottled(true);
-        if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
+        // if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
       } else {
         res.status(404).json({ error: "Không tìm thấy bình luận" });
       }
@@ -2253,7 +2373,7 @@ app.get("/api/stream", (req, res) => {
           }
           saveStateBackup(state);
           saveMainStateToFirestoreThrottled(true);
-          if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
+          // if (getDb()) updateDoc(doc(getDb(), "bots", botId), { comments: bot.comments }).catch(console.error);
         } else {
           res.status(404).json({ error: "Không tìm thấy phản hồi bình luận" });
         }
@@ -2482,17 +2602,17 @@ app.get("/api/stream", (req, res) => {
       }
       saveStateBackup(state);
       
-      try {
-        const database = getDb();
-        if (database) {
-          updateDoc(doc(database, "botRequests", request.id), {
-            votes: increment(isVoting ? 1 : -1),
-            votedUserIds: isVoting ? arrayUnion(userId) : arrayRemove(userId)
-          }).catch(console.error);
-        }
-      } catch (e) {
-        console.warn("Could not update request votes on Firestore:", e);
-      }
+      // try {
+      //   const database = getDb();
+      //   if (database) {
+      //     updateDoc(doc(database, "botRequests", request.id), {
+      //       votes: increment(isVoting ? 1 : -1),
+      //       votedUserIds: isVoting ? arrayUnion(userId) : arrayRemove(userId)
+      //     }).catch(console.error);
+      //   }
+      // } catch (e) {
+      //   console.warn("Could not update request votes on Firestore:", e);
+      // }
       
       res.json({ success: true, votes: request.votes, voted: isVoting });
     } else {
@@ -2556,7 +2676,7 @@ app.get("/api/stream", (req, res) => {
     };
     request.userReplies.push(newReply);
     saveStateBackup(state);
-    if (getDb()) updateDoc(doc(getDb(), "botRequests", request.id), { userReplies: request.userReplies }).catch(console.error);
+    // if (getDb()) updateDoc(doc(getDb(), "botRequests", request.id), { userReplies: request.userReplies }).catch(console.error);
     res.json({ success: true, request, state });
   });
 
@@ -2570,7 +2690,7 @@ app.get("/api/stream", (req, res) => {
     if (request && request.userReplies) {
       request.userReplies = request.userReplies.filter(r => r.id !== replyId);
       saveStateBackup(state);
-      if (getDb()) updateDoc(doc(getDb(), "botRequests", request.id), { userReplies: request.userReplies }).catch(console.error);
+      // if (getDb()) updateDoc(doc(getDb(), "botRequests", request.id), { userReplies: request.userReplies }).catch(console.error);
       res.json({ success: true, state });
     } else {
       res.status(404).json({ error: "Không tìm thấy yêu cầu hoặc phản hồi" });

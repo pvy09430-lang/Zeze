@@ -5,7 +5,7 @@ import {
   Search, Calendar, Star, History, MessageSquare, Heart, Compass, Send, 
   HelpCircle, Sparkles, Navigation, ChevronDown, Check, RefreshCw, Eye, ExternalLink,
   Facebook, MessagesSquare, ThumbsUp, UserPlus, Smile, Bot as BotIcon, MessageCircle, X,
-  Trash2, ArrowUpDown, Award, Plus, Clock, ChevronRight
+  Trash2, ArrowUpDown, Award, Plus, Clock, ChevronRight, Share2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { BadgeStoreModal } from "./BadgeStoreModal";
@@ -95,11 +95,12 @@ function UserPanel({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [timeFilter, setTimeFilter] = useState<"all" | "today" | "week" | "month">("all");
   const [broadCategoryFilter, setBroadCategoryFilter] = useState<"all" | "top" | "new" | "interactive" | "special">("all");
+  const [sortBy, setSortBy] = useState<"newest" | "popular" | "az">("newest");
 
   // Reset pagination when filter criteria change
   useEffect(() => {
     setVisibleCount(12);
-  }, [activeTab, searchKeyword, selectedTags, timeFilter, broadCategoryFilter]);
+  }, [activeTab, searchKeyword, selectedTags, timeFilter, broadCategoryFilter, sortBy]);
   const [requestSearchKeyword, setRequestSearchKeyword] = useState("");
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
   const [isPromptExpanded, setIsPromptExpanded] = useState(false);
@@ -164,6 +165,28 @@ function UserPanel({
 
   // Collapsed details state
   const [expandedBotId, setExpandedBotId] = useState<string | null>(null);
+
+  const [copiedBotId, setCopiedBotId] = useState<string | null>(null);
+
+  // Auto expand bot if botId is provided in URL query params
+  useEffect(() => {
+    if (state.bots && state.bots.length > 0) {
+      const params = new URLSearchParams(window.location.search);
+      const urlBotId = params.get("botId");
+      if (urlBotId) {
+        const target = state.bots.find(b => b.id === urlBotId);
+        if (target) {
+          setExpandedBotId(urlBotId);
+          setTimeout(() => {
+            const el = document.getElementById(`bot-card-${urlBotId}`);
+            if (el) {
+              el.scrollIntoView({ behavior: "smooth", block: "center" });
+            }
+          }, 600);
+        }
+      }
+    }
+  }, [state.bots]);
 
   // Custom Badge & Title states
   const [isBadgeStoreOpen, setIsBadgeStoreOpen] = useState(false);
@@ -874,28 +897,30 @@ function UserPanel({
 
   // Filter Logic
   const getFilteredBots = () => {
-    let subset = state.bots;
+    let subset = state.bots || [];
     if (activeTab === "Bookmarks") {
-      subset = state.bots.filter(b => bookmarks.includes(b.id));
+      subset = (state.bots || []).filter(b => bookmarks.includes(b.id));
     } else {
       if (categoryTypeFilter === "All") {
-        subset = state.bots;
+        subset = state.bots || [];
       } else {
-        subset = state.bots.filter(b => b.type === categoryTypeFilter);
+        subset = (state.bots || []).filter(b => b.type === categoryTypeFilter);
       }
     }
 
     let list = subset.filter(bot => {
       // 1. Check keyword inside Name, AuthorNote, or Tags
+      const botName = bot.name || "";
+      const botAuthorNote = bot.authorNote || "";
       const matchesKeyword = searchKeyword.trim() === "" || 
-        bot.name.toLowerCase().includes(searchKeyword.toLowerCase()) || 
-        bot.authorNote.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-        (bot.tags || []).some(t => t.toLowerCase().includes(searchKeyword.toLowerCase()));
+        botName.toLowerCase().includes(searchKeyword.toLowerCase()) || 
+        botAuthorNote.toLowerCase().includes(searchKeyword.toLowerCase()) ||
+        (bot.tags || []).some(t => t && typeof t === "string" && t.toLowerCase().includes(searchKeyword.toLowerCase()));
 
       // 2. Check multiple tag intersections
       const matchesTags = selectedTags.length === 0 || 
         selectedTags.every(requiredTag => 
-          (bot.tags || []).some(bt => bt.toLowerCase() === requiredTag.toLowerCase())
+          (bot.tags || []).some(bt => bt && typeof bt === "string" && bt.toLowerCase() === requiredTag.toLowerCase())
         );
 
       // 3. Time Filter specific
@@ -928,13 +953,22 @@ function UserPanel({
       });
     } else if (broadCategoryFilter === "special") {
       // Highlight bots with rich assets (multiple tags or high views)
-      list = list.filter(b => b.tags.length >= 3 || (b.views || 0) >= 4);
+      list = list.filter(b => (b.tags || []).length >= 3 || (b.views || 0) >= 4);
       // Sort special by engagement
       list = [...list].sort((a, b) => {
-        const scoreA = (a.views || 0) + (a.tags.length * 5) + getBotCommentCount(a) * 5;
-        const scoreB = (b.views || 0) + (b.tags.length * 5) + getBotCommentCount(b) * 5;
+        const scoreA = (a.views || 0) + ((a.tags || []).length * 5) + getBotCommentCount(a) * 5;
+        const scoreB = (b.views || 0) + ((b.tags || []).length * 5) + getBotCommentCount(b) * 5;
         return scoreB - scoreA;
       });
+    }
+
+    // Apply manual user selected sorting
+    if (sortBy === "newest") {
+      list = [...list].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    } else if (sortBy === "popular") {
+      list = [...list].sort((a, b) => (b.views || 0) - (a.views || 0));
+    } else if (sortBy === "az") {
+      list = [...list].sort((a, b) => (a.name || "").localeCompare(b.name || "", "vi"));
     }
 
     return list;
@@ -942,7 +976,7 @@ function UserPanel({
 
   const currentFilteredList = React.useMemo(() => {
     return (activeTab === "GL" || activeTab === "Futa" || activeTab === "Bookmarks") ? getFilteredBots() : [];
-  }, [state.bots, activeTab, bookmarks, searchKeyword, selectedTags, timeFilter, broadCategoryFilter, categoryTypeFilter]);
+  }, [state.bots, activeTab, bookmarks, searchKeyword, selectedTags, timeFilter, broadCategoryFilter, categoryTypeFilter, sortBy]);
 
   const displayedBots = React.useMemo(() => {
     return currentFilteredList.slice(0, visibleCount);
@@ -1565,18 +1599,6 @@ function UserPanel({
           </button>
 
           <div className="md:ml-auto flex items-center gap-2">
-            <button
-              id="user-manual-sync-btn"
-              onClick={() => {
-                setLastSyncTime(new Date().getTime());
-                onRefresh();
-              }}
-              className="px-4 py-2.5 text-xs font-bold rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-600 dark:text-emerald-400 cursor-pointer border border-emerald-500/20 hover:border-emerald-500/40 transition-all duration-200 flex items-center gap-2 relative"
-              title="Đồng bộ lại toàn bộ dữ liệu từ server ngay lập tức"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Đồng bộ ngay</span>
-            </button>
             {newBotsCount > 0 && (
               <div className="bg-red-550 dark:bg-red-600 bg-gradient-to-r from-rose-500 to-red-600 text-white text-[10px] font-black px-2.5 py-1.5 rounded-full border border-rose-350 dark:border-rose-500/30 shadow-md shadow-rose-500/10 hover:shadow-rose-500/20 transition-all flex items-center gap-1.5 animate-vibrate-gentle shrink-0 select-none">
                 <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping shrink-0"></span>
@@ -1630,6 +1652,22 @@ function UserPanel({
                   className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 dark:text-white text-xs focus:outline-none focus:ring-1 focus:ring-cyan-500"
                 />
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+              </div>
+
+              {/* Sorting Filter */}
+              <div className="flex items-center gap-2">
+                <ArrowUpDown className="w-4 h-4 text-slate-400 shrink-0" />
+                <span className="text-xs text-slate-400 whitespace-nowrap">Sắp xếp:</span>
+                <select
+                  id="user-sort-filter"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg dark:text-white focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                >
+                  <option value="newest">Mới nhất (Newest First)</option>
+                  <option value="popular">Yêu thích nhất (Most Popular)</option>
+                  <option value="az">Theo bảng chữ cái (A-Z)</option>
+                </select>
               </div>
 
               {/* Time specific filter */}
@@ -1997,6 +2035,31 @@ function UserPanel({
                               >
                                 <Star className={`w-3 h-3 ${isBookmarked ? "text-yellow-400 fill-yellow-400" : ""}`} />
                                 <span>{isBookmarked ? "Đã Lưu" : "Lưu Trữ"}</span>
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const shareUrl = `${window.location.origin}${window.location.pathname}?botId=${bot.id}`;
+                                  navigator.clipboard.writeText(shareUrl)
+                                    .then(() => {
+                                      setCopiedBotId(bot.id);
+                                      setTimeout(() => setCopiedBotId(null), 2000);
+                                    })
+                                    .catch(err => {
+                                      console.error("Lỗi khi sao chép liên kết:", err);
+                                      alert("Không thể tự động sao chép. Hãy sao chép liên kết này: " + shareUrl);
+                                    });
+                                }}
+                                className={`text-[10px] p-1 px-2 rounded transition cursor-pointer flex items-center gap-1 border font-bold shrink-0 ${
+                                  copiedBotId === bot.id
+                                    ? "bg-green-500 text-white border-green-500 hover:bg-green-600"
+                                    : "bg-slate-50 hover:bg-slate-100 dark:bg-white/5 dark:hover:bg-white/10 text-slate-500 dark:text-slate-400 hover:text-cyan-500 dark:hover:text-cyan-400 border-slate-200/50 dark:border-white/5"
+                                }`}
+                                title="Chia sẻ liên kết trực tiếp"
+                              >
+                                <Share2 className="w-3 h-3" />
+                                <span>{copiedBotId === bot.id ? "Đã chép!" : "Chia Sẻ"}</span>
                               </button>
                             </div>
                           </div>
