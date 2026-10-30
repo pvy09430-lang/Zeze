@@ -96,20 +96,19 @@ export default function AboutAuthor({
                  #{index + 1}
                </div>
 
-               <div className="w-20 h-28 bg-slate-100 dark:bg-slate-800 rounded-xl overflow-hidden shrink-0 group-hover:scale-105 transition-transform duration-300 relative border border-slate-200 dark:border-white/5">
+               <div className="w-24 sm:w-28 h-32 sm:h-36 bg-slate-100 dark:bg-slate-800 rounded-xl overflow-hidden shrink-0 group-hover:scale-105 transition-transform duration-300 relative border border-slate-200 dark:border-white/5">
                   {bot.imageUrl ? (
-                    <img src={bot.imageUrl} alt={bot.name} className="w-full h-full object-cover" />
+                    <img src={bot.imageUrl} alt={bot.name} className="w-full h-full object-cover object-top" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center"><BotIcon className="w-8 h-8 text-slate-300" /></div>
                   )}
                </div>
                <div className="flex flex-col py-1 overflow-hidden">
-                 <h4 className="font-bold text-slate-800 dark:text-white truncate">{bot.name}</h4>
+                 <h4 className="font-serif italic font-bold text-slate-800 dark:text-white truncate">{bot.name}</h4>
                  <div className="flex flex-wrap gap-1 mt-2">
-                   {bot.tags.slice(0, 3).map(t => (
-                     <span key={t} className="text-[10px] px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded-full text-slate-500 whitespace-nowrap">{t}</span>
+                   {(bot.tags || []).map(t => (
+                     <span key={t} className="font-serif italic text-[10px] px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded-full text-slate-500 whitespace-nowrap">{t}</span>
                    ))}
-                   {bot.tags.length > 3 && <span className="text-[10px] text-slate-400">+{bot.tags.length - 3}</span>}
                  </div>
                  <div className="mt-auto flex flex-wrap gap-3 text-xs text-slate-500">
                    <span>👁️ {bot.views || 0} lượt xem</span>

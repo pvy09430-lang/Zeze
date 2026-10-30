@@ -1,0 +1,6 @@
+{
+  "summary": "Kế hoạch triển khai chi tiết:\n1. Tạo Pop-up tự động thông báo bot mới ra mắt trong vòng 7 ngày (ảnh đại diện, tên in nghiêng sắc sảo, nút chat ngay/thử ngay) và gỡ bỏ giao diện thông báo cũ.\n2. Tích hợp khu vực Bảng tin tác giả tự đăng ngay dưới phần Tài khoản hiện tại, với phần bình luận gắn liền liền mạch bên dưới mỗi bản tin.\n3. Chuyển toàn bộ quyền đăng và xóa bảng tin vào Mục Tác Giả (AdminPanel), đảm bảo nút xóa hoạt động xóa thật và an toàn.\n4. Loại bỏ hoàn toàn mục 'Tất cả' (mặc định vào GL) và gỡ bỏ bảng xếp hạng phụ bên ngoài tab Bảng Xếp Hạng.\n5. Cập nhật kiểu chữ tên bot sang font in nghiêng sắc sảo (font-serif italic), hiển thị 100% đầy đủ các tag không bị cắt bớt.\n6. Bỏ phần dropdown/nút sắp xếp, thay thế bằng bộ lọc tag đa năng (tìm kiếm tag, chọn nhiều tag +, loại trừ tag không muốn xuất hiện -, bỏ chọn).\n7. Đưa các ý tưởng mới nhất lên đầu trong phần Đề xuất ý tưởng và thiết kế khu vực bình luận dạng thu gọn/mở rộng linh hoạt.",
+  "updatedAt": "2026-10-19T07:16:19.788639732Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

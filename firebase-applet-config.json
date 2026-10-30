@@ -6,5 +6,7 @@
   "firestoreDatabaseId": "ai-studio-e13ac7d6-72d4-48fc-a904-b3d7fe866ede",
   "storageBucket": "booming-oarlock-7tn3v.firebasestorage.app",
   "messagingSenderId": "492359885540",
-  "measurementId": ""
+  "measurementId": "",
+  "oAuthClientId": "492359885540-caf94o0ec4n3peci5ra9506cpr0ul3t5.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }

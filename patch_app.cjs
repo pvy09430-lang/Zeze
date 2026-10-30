@@ -1,6 +1,17 @@
 const fs = require('fs');
-let code = fs.readFileSync('src/App.tsx', 'utf8');
+let content = fs.readFileSync('src/App.tsx', 'utf8');
 
-// We replaced fetchState logic with onSnapshot.
-// The easiest is just to get the original src/App.tsx if it's cached, but we can't git.
-// So let's re-add the old fetchState behavior manually or with a regex replace.
+const target = `      const trimmed = text.trim();
+      if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+        console.error("[DEBUG UPSTREAM] Nhận phản hồi không hợp lệ (Không phải JSON) từ backend:", {`;
+
+const replacement = `      const trimmed = text.trim();
+      if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+        if (trimmed.includes("<title>Starting Server...</title>")) {
+           throw new Error("Máy chủ đang khởi động, vui lòng đợi...");
+        }
+        console.error("[DEBUG UPSTREAM] Nhận phản hồi không hợp lệ (Không phải JSON) từ backend:", {`;
+
+content = content.replace(target, replacement);
+fs.writeFileSync('src/App.tsx', content, 'utf8');
+console.log('Patched App.tsx successfully!');

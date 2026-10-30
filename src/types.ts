@@ -52,6 +52,10 @@ export interface Announcement {
   title: string;
   content: string;
   createdAt: string;
+  imageUrl?: string;
+  likes?: number;
+  likedUserIds?: string[];
+  comments?: Comment[];
 }
 
 export interface FeedbackReply {
@@ -166,6 +170,7 @@ export interface AppState {
   botRequests: BotRequest[];
   authorSettings?: AuthorSettings;
   polls?: Poll[];
+  deletedPollIds?: string[];
   visitorLogs?: VisitorLog[];
   pendingWritesCount?: number;
   quotaStats?: QuotaStats;

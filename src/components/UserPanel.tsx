@@ -5,10 +5,15 @@ import {
   Search, Calendar, Star, History, MessageSquare, Heart, Compass, Send, 
   HelpCircle, Sparkles, Navigation, ChevronDown, Check, RefreshCw, Eye, ExternalLink,
   Facebook, MessagesSquare, ThumbsUp, UserPlus, Smile, Bot as BotIcon, MessageCircle, X,
-  Trash2, ArrowUpDown, Award, Plus, Clock, ChevronRight, Share2
+  Trash2, ArrowUpDown, Award, Plus, Clock, ChevronRight, Share2,
+  TrendingUp, ZoomIn, Trophy, Flame, Bell
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { BadgeStoreModal } from "./BadgeStoreModal";
+import AuthorNewsfeedWidget from "./AuthorNewsfeedWidget";
+import LeaderboardView from "./LeaderboardView";
+import MasonryFeedbackView from "./MasonryFeedbackView";
+import MasonryRequestsView from "./MasonryRequestsView";
 
 interface UserPanelProps {
   state: AppState;
@@ -25,10 +30,10 @@ interface UserPanelProps {
 
 function BotSkeleton() {
   return (
-    <div className="bg-white/80 dark:bg-slate-900/60 backdrop-blur-xl border border-slate-200/60 dark:border-white/10 p-5 rounded-2xl flex flex-col justify-between animate-pulse relative overflow-hidden min-h-[260px] sm:min-h-[240px]">
+    <div className="bg-white/80 dark:bg-slate-900/60 backdrop-blur-xl border border-slate-200/60 dark:border-white/10 p-5 rounded-2xl flex flex-col justify-between animate-pulse relative overflow-hidden">
       <div className="flex flex-col sm:flex-row gap-4 sm:gap-5">
         {/* Left Thumbnail Skeleton */}
-        <div className="w-full sm:w-28 h-28 sm:h-36 bg-slate-200 dark:bg-slate-800 rounded-xl shrink-0" />
+        <div className="w-full sm:w-48 md:w-52 lg:w-60 xl:w-64 h-64 sm:h-72 md:h-80 bg-slate-200 dark:bg-slate-800 rounded-2xl shrink-0" />
         
         {/* Right Content Skeleton */}
         <div className="flex-1 space-y-3">
@@ -76,13 +81,15 @@ function UserPanel({
   passcode,
   loading
 }: UserPanelProps) {
-  // Navigation & Sub-tabs
-  const [activeTab, setActiveTab] = useState<"GL" | "Futa" | "Feedback" | "Requests" | "Bookmarks">("GL");
+  // Navigation & Sub-tabs (No "All" tab - GL is default)
+  const [activeTab, setActiveTab] = useState<"GL" | "Futa" | "Leaderboard" | "Feedback" | "Requests" | "Bookmarks">("GL");
 
   // Search & Filters State
   const [searchKeyword, setSearchKeyword] = useState("");
   const [localSearchKeyword, setLocalSearchKeyword] = useState("");
   const [visibleCount, setVisibleCount] = useState(12);
+
+
 
   // Debounce searchKeyword to prevent heavy re-renders while typing
   useEffect(() => {
@@ -92,19 +99,21 @@ function UserPanel({
     return () => clearTimeout(timer);
   }, [localSearchKeyword]);
 
+  // Tag filter states: Included tags (+) and Excluded tags (-)
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [excludedTags, setExcludedTags] = useState<string[]>([]);
+  const [tagSearchQuery, setTagSearchQuery] = useState("");
   const [timeFilter, setTimeFilter] = useState<"all" | "today" | "week" | "month">("all");
-  const [broadCategoryFilter, setBroadCategoryFilter] = useState<"all" | "top" | "new" | "interactive" | "special">("all");
-  const [sortBy, setSortBy] = useState<"newest" | "popular" | "az">("newest");
 
   // Reset pagination when filter criteria change
   useEffect(() => {
     setVisibleCount(12);
-  }, [activeTab, searchKeyword, selectedTags, timeFilter, broadCategoryFilter, sortBy]);
+  }, [activeTab, searchKeyword, selectedTags, excludedTags, timeFilter]);
   const [requestSearchKeyword, setRequestSearchKeyword] = useState("");
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
   const [isPromptExpanded, setIsPromptExpanded] = useState(false);
   const [expandedPrompts, setExpandedPrompts] = useState<string[]>([]);
+
 
   // Liked comment & reply IDs state stored in localStorage
   const [likedCommentIds, setLikedCommentIds] = useState<string[]>(() => {
@@ -149,19 +158,6 @@ function UserPanel({
 
   // Bot comments state
   const [commentInput, setCommentInput] = useState<{ [botId: string]: string }>({});
-
-  // Reading Mode & Category Type Filter States
-  const [categoryTypeFilter, setCategoryTypeFilter] = useState<"All" | "GL" | "Futa">("All");
-
-
-  // Keep category type filter synchronized with active tabs
-  useEffect(() => {
-    if (activeTab === "GL") {
-      setCategoryTypeFilter("GL");
-    } else if (activeTab === "Futa") {
-      setCategoryTypeFilter("Futa");
-    }
-  }, [activeTab]);
 
   // Collapsed details state
   const [expandedBotId, setExpandedBotId] = useState<string | null>(null);
@@ -231,11 +227,10 @@ function UserPanel({
       }
     });
 
-    // Sort by frequency (most popular first) and return tags
+    // Sort by frequency (most popular first) and return all tags
     return Object.entries(tagCounts)
       .sort((a, b) => b[1] - a[1])
-      .map(entry => entry[0])
-      .slice(0, 15); // Show up to 15 most popular tags
+      .map(entry => entry[0]);
   };
 
   const glSuggestedTags = React.useMemo(() => getDynamicSuggestedTags("GL"), [state.bots]);
@@ -881,18 +876,34 @@ function UserPanel({
     return state.bots.slice(0, 3);
   };
 
-  // Select/Deselect custom tags
+  // 3-state tag toggle: Unselected -> Included (+) -> Excluded (-) -> Unselected
   const handleToggleTagFilter = (tag: string) => {
     if (selectedTags.includes(tag)) {
-      setSelectedTags(selectedTags.filter(t => t !== tag));
+      // Switch from Included (+) to Excluded (-)
+      setSelectedTags(prev => prev.filter(t => t !== tag));
+      setExcludedTags(prev => [...prev, tag]);
+    } else if (excludedTags.includes(tag)) {
+      // Switch from Excluded (-) to Unselected
+      setExcludedTags(prev => prev.filter(t => t !== tag));
     } else {
-      setSelectedTags([...selectedTags, tag]);
+      // Switch from Unselected to Included (+)
+      setSelectedTags(prev => [...prev, tag]);
     }
   };
 
-  // Clear tag filters
+  const handleRemoveIncludedTag = (tag: string) => {
+    setSelectedTags(prev => prev.filter(t => t !== tag));
+  };
+
+  const handleRemoveExcludedTag = (tag: string) => {
+    setExcludedTags(prev => prev.filter(t => t !== tag));
+  };
+
+  // Clear all tag filters
   const handleClearTagFilter = () => {
     setSelectedTags([]);
+    setExcludedTags([]);
+    setTagSearchQuery("");
   };
 
   // Filter Logic
@@ -900,12 +911,12 @@ function UserPanel({
     let subset = state.bots || [];
     if (activeTab === "Bookmarks") {
       subset = (state.bots || []).filter(b => bookmarks.includes(b.id));
+    } else if (activeTab === "GL") {
+      subset = (state.bots || []).filter(b => b.type === "GL");
+    } else if (activeTab === "Futa") {
+      subset = (state.bots || []).filter(b => b.type === "Futa");
     } else {
-      if (categoryTypeFilter === "All") {
-        subset = state.bots || [];
-      } else {
-        subset = (state.bots || []).filter(b => b.type === categoryTypeFilter);
-      }
+      subset = (state.bots || []).filter(b => b.type === "GL");
     }
 
     let list = subset.filter(bot => {
@@ -917,13 +928,19 @@ function UserPanel({
         botAuthorNote.toLowerCase().includes(searchKeyword.toLowerCase()) ||
         (bot.tags || []).some(t => t && typeof t === "string" && t.toLowerCase().includes(searchKeyword.toLowerCase()));
 
-      // 2. Check multiple tag intersections
-      const matchesTags = selectedTags.length === 0 || 
+      // 2. Check multiple tag intersections (Bot must have all selected tags)
+      const matchesIncludedTags = selectedTags.length === 0 || 
         selectedTags.every(requiredTag => 
           (bot.tags || []).some(bt => bt && typeof bt === "string" && bt.toLowerCase() === requiredTag.toLowerCase())
         );
 
-      // 3. Time Filter specific
+      // 3. Check excluded tags (Bot must NOT contain any excluded tags)
+      const matchesExcludedTags = excludedTags.length === 0 ||
+        !excludedTags.some(exTag =>
+          (bot.tags || []).some(bt => bt && typeof bt === "string" && bt.toLowerCase() === exTag.toLowerCase())
+        );
+
+      // 4. Time Filter specific
       let matchesTime = true;
       if (timeFilter !== "all" && bot.createdAt) {
         const botDate = new Date(bot.createdAt).getTime();
@@ -937,46 +954,34 @@ function UserPanel({
         }
       }
 
-      return matchesKeyword && matchesTags && matchesTime;
+      return matchesKeyword && matchesIncludedTags && matchesExcludedTags && matchesTime;
     });
 
-    // 4. Broad Category Filter Sort/Extra Filters
-    if (broadCategoryFilter === "top") {
-      list = [...list].sort((a, b) => (b.views || 0) - (a.views || 0));
-    } else if (broadCategoryFilter === "new" || broadCategoryFilter === "all") {
-      list = [...list].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-    } else if (broadCategoryFilter === "interactive") {
-      list = [...list].sort((a, b) => {
-        const engagementA = (a.likes || 0) + getBotCommentCount(a) * 3 + (a.views || 0) * 0.1;
-        const engagementB = (b.likes || 0) + getBotCommentCount(b) * 3 + (b.views || 0) * 0.1;
-        return engagementB - engagementA;
-      });
-    } else if (broadCategoryFilter === "special") {
-      // Highlight bots with rich assets (multiple tags or high views)
-      list = list.filter(b => (b.tags || []).length >= 3 || (b.views || 0) >= 4);
-      // Sort special by engagement
-      list = [...list].sort((a, b) => {
-        const scoreA = (a.views || 0) + ((a.tags || []).length * 5) + getBotCommentCount(a) * 5;
-        const scoreB = (b.views || 0) + ((b.tags || []).length * 5) + getBotCommentCount(b) * 5;
-        return scoreB - scoreA;
-      });
-    }
-
-    // Apply manual user selected sorting
-    if (sortBy === "newest") {
-      list = [...list].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-    } else if (sortBy === "popular") {
-      list = [...list].sort((a, b) => (b.views || 0) - (a.views || 0));
-    } else if (sortBy === "az") {
-      list = [...list].sort((a, b) => (a.name || "").localeCompare(b.name || "", "vi"));
-    }
+    // Default sorting: Newest First
+    list = [...list].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
     return list;
   };
 
+  const hasRecentComment = (bot: Bot): boolean => {
+    if (!bot.comments || bot.comments.length === 0) return false;
+    const now = Date.now();
+    for (const c of bot.comments) {
+      const t = new Date(c.createdAt).getTime();
+      if ((now - t) < 14 * 24 * 3600 * 1000) return true;
+      if (c.replies) {
+        for (const r of c.replies) {
+          const rt = new Date(r.createdAt).getTime();
+          if ((now - rt) < 14 * 24 * 3600 * 1000) return true;
+        }
+      }
+    }
+    return false;
+  };
+
   const currentFilteredList = React.useMemo(() => {
     return (activeTab === "GL" || activeTab === "Futa" || activeTab === "Bookmarks") ? getFilteredBots() : [];
-  }, [state.bots, activeTab, bookmarks, searchKeyword, selectedTags, timeFilter, broadCategoryFilter, categoryTypeFilter, sortBy]);
+  }, [state.bots, activeTab, bookmarks, searchKeyword, selectedTags, excludedTags, timeFilter]);
 
   const displayedBots = React.useMemo(() => {
     return currentFilteredList.slice(0, visibleCount);
@@ -1188,14 +1193,14 @@ function UserPanel({
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
       
-      {/* LEFT COLUMN: Filter panels, Profile, Suggestions, History */}
+      {/* LEFT COLUMN: Profile & Author Newsfeed */}
       <div className="space-y-6 lg:col-span-1">
         
         {/* Profile Card & Avatar */}
         <div className="bg-white/80 dark:bg-slate-900/65 backdrop-blur-xl rounded-2xl border border-slate-200/60 dark:border-white/10 p-5 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 bg-gradient-to-tr from-cyan-400 to-blue-600 rounded-xl flex items-center justify-center text-2xl shadow-inner relative">
-              {avatar && avatar.startsWith('data:') ? (
+              {avatar && avatar.match(/^(data:|http|\/)/) ? (
                 <img src={avatar} className="w-full h-full rounded-xl object-cover" alt="avatar" />
               ) : (
                 <span>{avatar}</span>
@@ -1231,13 +1236,24 @@ function UserPanel({
           </button>
         </div>
 
+        {/* BẢNG TIN TÁC GIẢ TỰ ĐĂNG (Vị trí nằm ngay dưới phần tài khoản hiện tại, bình luận gắn liền liền mạch) */}
+        <div className="mt-4">
+          <AuthorNewsfeedWidget
+            announcements={state.announcements || []}
+            onRefresh={() => onRefresh(true)}
+            userId={userId}
+            nickname={nickname}
+            avatar={avatar}
+            isAdminUnlocked={isAdminUnlocked}
+            passcode={passcode}
+          />
+        </div>
       </div>
 
       {/* RIGHT COLUMN: Interactive Bot Explorer + Feedback + Requests */}
       <div className="lg:col-span-3 space-y-6">
 
-        {/* ACTIVE POLLS CONTAINER REMOVED */}
-        {false && (
+        {state.polls && state.polls.length > 0 && (
           <div className="bg-pink-50/30 dark:bg-pink-950/10 backdrop-blur-xl rounded-2xl border border-pink-100 dark:border-pink-950/40 p-6 shadow-sm space-y-5 relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-pink-400 via-rose-300 to-pink-500"></div>
             
@@ -1540,6 +1556,27 @@ function UserPanel({
             <span>🔵 Bot Futa AI (Specialty)</span>
           </button>
 
+          {/* Leaderboard Tab */}
+          <button
+            id="tab-btn-leaderboard"
+            onClick={() => { setActiveTab("Leaderboard"); handleClearTagFilter(); }}
+            className={`relative px-4 py-2.5 text-xs font-bold rounded-lg cursor-pointer transition-all duration-300 flex items-center gap-1.5 hover:scale-[1.03] active:scale-95 z-10 ${
+              activeTab === "Leaderboard"
+                ? "text-white font-extrabold"
+                : "text-slate-600 dark:text-slate-400 hover:bg-slate-150/60 dark:hover:bg-white/5 dark:hover:text-white"
+            }`}
+          >
+            {activeTab === "Leaderboard" && (
+              <motion.span
+                layoutId="activeTabBadge"
+                className="absolute inset-0 bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-600 rounded-lg -z-10 shadow-md shadow-amber-500/20"
+                transition={{ type: "spring", stiffness: 350, damping: 28 }}
+              />
+            )}
+            <Trophy className={`w-3.5 h-3.5 ${activeTab === "Leaderboard" ? "text-amber-100 animate-pulse" : "text-amber-500"}`} />
+            <span>🏆 Bảng Xếp Hạng</span>
+          </button>
+
           <button
             id="tab-btn-feedback"
             onClick={() => setActiveTab("Feedback")}
@@ -1597,225 +1634,174 @@ function UserPanel({
             <Star className={`w-4 h-4 ${activeTab === "Bookmarks" ? "text-yellow-300 fill-yellow-300" : "text-yellow-500"}`} /> 
             <span>Bot Đã Lưu</span>
           </button>
-
-          <div className="md:ml-auto flex items-center gap-2">
-            {newBotsCount > 0 && (
-              <div className="bg-red-550 dark:bg-red-600 bg-gradient-to-r from-rose-500 to-red-600 text-white text-[10px] font-black px-2.5 py-1.5 rounded-full border border-rose-350 dark:border-rose-500/30 shadow-md shadow-rose-500/10 hover:shadow-rose-500/20 transition-all flex items-center gap-1.5 animate-vibrate-gentle shrink-0 select-none">
-                <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping shrink-0"></span>
-                <span>+{newBotsCount} Bot Mới</span>
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Explorer views */}
         {(activeTab === "GL" || activeTab === "Futa" || activeTab === "Bookmarks") && (
           <div className="space-y-6 animate-fade-in">
             
-            {/* Secondary horizontal filter bar */}
-            <div className="flex flex-wrap items-center gap-2 pb-1 border-b border-slate-100 dark:border-white/5">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-2 select-none">Mục Lọc Nhanh:</span>
-              {[
-                { id: "all", label: "✨ Tất Cả Bot", color: "from-cyan-500 to-blue-500" },
-                { id: "top", label: "⭐ Top Lượt Xem", color: "from-amber-550 to-orange-500" },
-                { id: "new", label: "⚡ Mới Nhất", color: "from-emerald-500 to-teal-500" },
-                { id: "interactive", label: "🔥 Nhiều Tương Tác", color: "from-rose-500 to-pink-500" },
-                { id: "special", label: "🦄 Đặc Sắc", color: "from-purple-500 to-violet-500" }
-              ].map(cat => {
-                const isActive = broadCategoryFilter === cat.id;
-                return (
-                  <button
-                    key={cat.id}
-                    onClick={() => setBroadCategoryFilter(cat.id as any)}
-                    className={`px-3.5 py-1.5 rounded-full text-xs font-bold tracking-tight cursor-pointer transition-all duration-300 flex items-center gap-1 border ${
-                      isActive
-                        ? `bg-gradient-to-r ${cat.color} text-white shadow-md border-transparent scale-105`
-                        : "bg-white/80 dark:bg-slate-900/60 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 border-slate-200/60 dark:border-white/5"
-                    }`}
-                  >
-                    {cat.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Search Filters Bar */}
-            <div className="bg-white dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col md:flex-row gap-3">
-              {/* Keyword text filter */}
-              <div className="relative flex-1">
-                <input
-                  id="user-search-keyword"
-                  type="text"
-                  placeholder="Kính lúp tìm kiếm từ khóa, tên bot, dặn dò tác giả..."
-                  value={localSearchKeyword}
-                  onChange={(e) => setLocalSearchKeyword(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 dark:text-white text-xs focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                />
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-              </div>
-
-              {/* Sorting Filter */}
-              <div className="flex items-center gap-2">
-                <ArrowUpDown className="w-4 h-4 text-slate-400 shrink-0" />
-                <span className="text-xs text-slate-400 whitespace-nowrap">Sắp xếp:</span>
-                <select
-                  id="user-sort-filter"
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as any)}
-                  className="px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg dark:text-white focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                >
-                  <option value="newest">Mới nhất (Newest First)</option>
-                  <option value="popular">Yêu thích nhất (Most Popular)</option>
-                  <option value="az">Theo bảng chữ cái (A-Z)</option>
-                </select>
-              </div>
-
-              {/* Time specific filter */}
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
-                <span className="text-xs text-slate-400 whitespace-nowrap">Bộ lọc:</span>
-                <select
-                  id="user-time-filter"
-                  value={timeFilter}
-                  onChange={(e) => setTimeFilter(e.target.value as any)}
-                  className="px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg dark:text-white"
-                >
-                  <option value="all">Mọi lúc</option>
-                  <option value="today">Hôm nay</option>
-                  <option value="week">1 tuần qua</option>
-                  <option value="month">1 tháng qua</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Tag Quick Filters & Category Switcher */}
-            {(activeTab === "GL" || activeTab === "Futa") && (
-              <div className="bg-white/80 dark:bg-slate-900/65 backdrop-blur-xl rounded-2xl border border-slate-200/60 dark:border-white/10 p-4 shadow-sm mb-6 space-y-4">
-                {/* Category Toggles with counts */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/60">
-                  <div className="flex items-center gap-1.5">
-                    <Compass className="w-4 h-4 text-cyan-500" />
-                    <span className="text-xs font-bold text-slate-800 dark:text-slate-100 uppercase tracking-wide">Danh mục bot</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      { id: "All", label: "Tất cả", count: state.bots.length, color: "from-slate-600 to-slate-700" },
-                      { id: "GL", label: "Girl Love", count: state.bots.filter(b => b.type === "GL").length, color: "from-blue-600 to-indigo-600" },
-                      { id: "Futa", label: "Futa", count: state.bots.filter(b => b.type === "Futa").length, color: "from-cyan-650 to-teal-600" }
-                    ].map(cat => {
-                      const isActive = categoryTypeFilter === cat.id;
-                      return (
-                        <button
-                          key={cat.id}
-                          onClick={() => setCategoryTypeFilter(cat.id as any)}
-                          className={`px-3 py-1 rounded-full text-xs font-bold transition-all duration-300 cursor-pointer flex items-center gap-1.5 border ${
-                            isActive
-                              ? `bg-gradient-to-r ${cat.color} text-white shadow-md border-transparent scale-105`
-                              : "bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-850 border-slate-200/60 dark:border-slate-800"
-                          }`}
-                        >
-                          <span>{cat.label}</span>
-                          <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-extrabold ${isActive ? "bg-white/20 text-white" : "bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400"}`}>
-                            {cat.count}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
+            {/* Search & Tag Filter Bar (No Sorting dropdown, No mini leaderboard) */}
+            <div className="space-y-4">
+              <div className="bg-white dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col md:flex-row gap-3">
+                {/* Keyword search */}
+                <div className="relative flex-1">
+                  <input
+                    id="user-search-keyword"
+                    type="text"
+                    placeholder="Tìm kiếm từ khóa, tên bot, dặn dò tác giả..."
+                    value={localSearchKeyword}
+                    onChange={(e) => setLocalSearchKeyword(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 dark:text-white text-xs focus:outline-none focus:ring-1 focus:ring-pink-500"
+                  />
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                 </div>
 
-                <div className="space-y-2">
-                  <h3 className="font-display font-bold text-slate-850 dark:text-slate-100 text-[11px] flex items-center gap-1.5 uppercase tracking-wide text-slate-450 dark:text-slate-500">
-                    <Search className="w-3.5 h-3.5 text-cyan-500" />
-                    Lọc nhanh Tag {categoryTypeFilter === "All" ? "" : categoryTypeFilter}
-                  </h3>
+                {/* Tag Search Input */}
+                <div className="relative w-full md:w-64">
+                  <input
+                    type="text"
+                    placeholder="🔍 Lọc danh sách tag..."
+                    value={tagSearchQuery}
+                    onChange={(e) => setTagSearchQuery(e.target.value)}
+                    className="w-full pl-3 pr-8 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 dark:text-white text-xs focus:outline-none focus:ring-1 focus:ring-pink-500"
+                  />
+                  {tagSearchQuery && (
+                    <button
+                      onClick={() => setTagSearchQuery("")}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 text-xs"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
 
-                  <div className="flex flex-wrap gap-1.5">
-                    {(categoryTypeFilter === "All"
-                      ? Array.from(new Set([...glSuggestedTags, ...futaSuggestedTags]))
-                      : (categoryTypeFilter === "GL" ? glSuggestedTags : futaSuggestedTags)
-                    ).map((tag) => {
-                      const isSelected = selectedTags.includes(tag);
+                {/* Time filter */}
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
+                  <select
+                    id="user-time-filter"
+                    value={timeFilter}
+                    onChange={(e) => setTimeFilter(e.target.value as any)}
+                    className="px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl dark:text-white"
+                  >
+                    <option value="all">Mọi lúc</option>
+                    <option value="today">Hôm nay</option>
+                    <option value="week">1 tuần qua</option>
+                    <option value="month">1 tháng qua</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Multi-Tag Interactive Selector & Exclude System */}
+              <div className="bg-white/80 dark:bg-slate-900/65 backdrop-blur-xl rounded-2xl border border-slate-200/60 dark:border-white/10 p-4 shadow-sm space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-heading font-black text-xs uppercase tracking-wide text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-pink-500" />
+                      Tìm Kiếm & Lọc Theo Tag
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-sans hidden sm:inline">
+                      (Nhấp để Chọn [+] / Loại trừ [-] / Bỏ chọn)
+                    </span>
+                  </div>
+
+                  {(selectedTags.length > 0 || excludedTags.length > 0) && (
+                    <button
+                      onClick={handleClearTagFilter}
+                      className="text-[11px] font-bold text-rose-500 hover:text-rose-600 cursor-pointer transition flex items-center gap-1 bg-rose-50 dark:bg-rose-950/40 px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-900/40"
+                    >
+                      Xóa tất cả bộ lọc tag ({selectedTags.length + excludedTags.length}) <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Active Tag Filters Bar (Selected & Excluded) */}
+                {(selectedTags.length > 0 || excludedTags.length > 0) && (
+                  <div className="flex flex-wrap items-center gap-2 p-2.5 bg-slate-50 dark:bg-slate-950/50 rounded-xl border border-slate-200/50 dark:border-slate-800">
+                    {selectedTags.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400">
+                          Bắt buộc có (+):
+                        </span>
+                        {selectedTags.map(t => (
+                          <span
+                            key={`sel-${t}`}
+                            className="font-serif italic font-medium text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-400/50 flex items-center gap-1 shadow-2xs"
+                          >
+                            <span>#{t}</span>
+                            <button
+                              onClick={() => handleRemoveIncludedTag(t)}
+                              className="hover:text-rose-600 cursor-pointer font-bold ml-0.5 text-xs"
+                              title="Bỏ tag này"
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {excludedTags.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 ml-0 sm:ml-2">
+                        <span className="text-[10px] uppercase font-bold text-rose-600 dark:text-rose-400">
+                          Loại trừ (-):
+                        </span>
+                        {excludedTags.map(t => (
+                          <span
+                            key={`ex-${t}`}
+                            className="font-serif italic font-medium text-[11px] px-2.5 py-0.5 rounded-full bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-400/50 line-through flex items-center gap-1 shadow-2xs"
+                          >
+                            <span>#{t}</span>
+                            <button
+                              onClick={() => handleRemoveExcludedTag(t)}
+                              className="hover:text-emerald-600 cursor-pointer font-bold ml-0.5 text-xs no-underline inline-block"
+                              title="Bỏ loại trừ tag này"
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Available Suggested Tags Cloud (Compact, Italic, Elegant) */}
+                <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto pr-1 scrollbar-thin">
+                  {(activeTab === "GL"
+                    ? glSuggestedTags
+                    : activeTab === "Futa"
+                    ? futaSuggestedTags
+                    : Array.from(new Set([...glSuggestedTags, ...futaSuggestedTags]))
+                  )
+                    .filter(t => !tagSearchQuery.trim() || t.toLowerCase().includes(tagSearchQuery.toLowerCase()))
+                    .map((tag) => {
+                      const isIncluded = selectedTags.includes(tag);
+                      const isExcluded = excludedTags.includes(tag);
+
                       return (
                         <button
                           key={tag}
+                          type="button"
                           onClick={() => handleToggleTagFilter(tag)}
-                          className={`text-xs px-2.5 py-1 rounded-full transition cursor-pointer flex items-center gap-1 border ${
-                            isSelected
-                              ? "bg-blue-600 text-white font-bold shadow-sm border-blue-500"
-                              : "bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 border-slate-200/60 dark:border-slate-800"
+                          className={`font-serif italic text-[11px] px-2.5 py-1 rounded-full transition-all cursor-pointer flex items-center gap-1 border shadow-2xs select-none ${
+                            isIncluded
+                              ? "bg-pink-600 text-white font-bold border-pink-500 shadow-sm shadow-pink-500/20"
+                              : isExcluded
+                              ? "bg-rose-600 text-white font-bold border-rose-500 line-through shadow-sm shadow-rose-500/20"
+                              : "bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:bg-pink-50 dark:hover:bg-slate-800 border-slate-200/70 dark:border-slate-800 hover:border-pink-300 dark:hover:border-pink-800"
                           }`}
+                          title={isIncluded ? "Đang chọn (Nhấp để loại trừ)" : isExcluded ? "Đang loại trừ (Nhấp để bỏ lọc)" : "Nhấp để chọn tag này"}
                         >
                           <span>#{tag}</span>
-                          {isSelected && <Check className="w-3 h-3" />}
+                          {isIncluded && <span className="text-[10px] font-sans font-bold">✓</span>}
+                          {isExcluded && <span className="text-[10px] font-sans font-bold no-underline">✕</span>}
                         </button>
                       );
                     })}
-                  </div>
-                </div>
-
-                {selectedTags.length > 0 && (
-                  <div className="flex items-center justify-between pt-2 mt-2 border-t border-slate-100 dark:border-slate-800/60">
-                    <span className="text-[11px] text-slate-400">Đã áp <strong className="text-cyan-500">{selectedTags.length}</strong> filter tag</span>
-                    <button
-                      onClick={handleClearTagFilter}
-                      className="text-[11px] font-bold text-rose-500 hover:text-rose-600 cursor-pointer transition flex items-center gap-1"
-                    >
-                      Xóa tất cả bộ lọc <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Top Trending Section (Restored) */}
-            {(activeTab === "GL" || activeTab === "Futa") && broadCategoryFilter === "all" && searchKeyword === "" && selectedTags.length === 0 && (
-              <div className="bg-gradient-to-br from-amber-500/10 via-orange-500/5 to-transparent dark:from-amber-900/10 dark:via-transparent border border-amber-500/20 rounded-2xl p-5 mb-6">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="p-2 bg-amber-500 text-white rounded-xl shadow-lg shadow-amber-500/20">
-                    <Award className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h3 className="font-display font-black text-slate-800 dark:text-slate-100 text-sm uppercase tracking-wider flex items-center gap-2">
-                      Top Bot Được Yêu Thích Nhất
-                      <span className="text-[10px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-bold animate-pulse">TRENDING</span>
-                    </h3>
-                    <p className="text-[10px] text-slate-500 dark:text-slate-400">Những siêu phẩm được cộng đồng click nhiều nhất trong tuần</p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {[...state.bots]
-                    .filter(b => b.type === (activeTab === "GL" ? "GL" : "Futa"))
-                    .sort((a, b) => (b.views || 0) - (a.views || 0))
-                    .slice(0, 3)
-                    .map((bot, idx) => (
-                      <div 
-                        key={`trending-${bot.id}`}
-                        onClick={() => {
-                          handleBotClick(bot);
-                          setExpandedBotId(bot.id);
-                        }}
-                        className="bg-white/90 dark:bg-slate-900/80 p-3 rounded-xl border border-amber-200/50 dark:border-white/5 cursor-pointer hover:scale-[1.03] transition-all flex items-center gap-3 relative group overflow-hidden"
-                      >
-                        <div className="absolute top-0 left-0 w-1 h-full bg-amber-500"></div>
-                        <div className="w-10 h-10 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 text-xl overflow-hidden border border-slate-200/50 dark:border-white/5">
-                          {bot.imageUrl ? (
-                            <img src={getOptimizedImageUrl(bot.imageUrl, { width: 100, height: 100 })} alt="" className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
-                          ) : (
-                            idx === 0 ? "🥇" : idx === 1 ? "🥈" : "🥉"
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="font-black text-[11px] text-slate-800 dark:text-slate-100 truncate uppercase tracking-tighter">{bot.name}</p>
-                          <p className="text-[10px] text-amber-600 dark:text-amber-400 font-bold flex items-center gap-1">
-                            <Eye className="w-3 h-3" /> {bot.views || 0} clicks
-                          </p>
-                        </div>
-                      </div>
-                    ))}
                 </div>
               </div>
-            )}
+            </div>
 
             {/* Main Bot Grid */}
             <AnimatePresence mode="wait">
@@ -1899,6 +1885,13 @@ function UserPanel({
                   const dateToCheck = bot.updatedAt || bot.createdAt;
                   const isRecentlyUpdated = dateToCheck ? (new Date().getTime() - new Date(dateToCheck).getTime()) < 24 * 60 * 60 * 1000 : false;
                   
+                  // Auto badge: Has new comments within last 7 days
+                  const hasRecentComment = Array.isArray(bot.comments) && bot.comments.some(c => {
+                    const cTime = new Date(c.createdAt || 0).getTime();
+                    const hasRecentReply = Array.isArray(c.replies) && c.replies.some(r => (Date.now() - new Date(r.createdAt || 0).getTime()) < 7 * 24 * 3600 * 1000);
+                    return (Date.now() - cTime) < 7 * 24 * 3600 * 1000 || hasRecentReply;
+                  });
+                  
                   return (
                     <div 
                       key={bot.id}
@@ -1908,33 +1901,49 @@ function UserPanel({
                       {/* Ambient glowing wave sweep overlay */}
                       <div className="absolute inset-0 bg-gradient-to-tr from-cyan-500/0 via-transparent to-cyan-500/0 group-hover:from-cyan-500/[0.015] group-hover:to-cyan-500/[0.035] transition-all duration-700 pointer-events-none"></div>
 
-                      <div className="flex flex-col sm:flex-row gap-4 sm:gap-5 relative z-10">
+                      <div className="flex flex-col sm:flex-row gap-5 sm:gap-6 relative z-10">
                         
-                        {/* Elegant Left/Thumbnail side layout identical to mockup */}
-                        <div className="w-full sm:w-28 h-28 sm:h-36 bg-gradient-to-br from-slate-800 to-slate-950 dark:from-slate-900 dark:to-slate-950 rounded-xl overflow-hidden shrink-0 relative border border-slate-200 dark:border-white/5 flex flex-col items-center justify-center select-none shadow-inner group-hover:scale-105 transition-transform duration-300 ease-out">
+                        {/* Generous, Cinematic & High-Res Bot Cover Image */}
+                        <div className="w-full sm:w-48 md:w-52 lg:w-60 xl:w-64 h-72 sm:h-80 md:h-84 lg:h-92 bg-gradient-to-br from-slate-800 to-slate-950 dark:from-slate-900 dark:to-slate-950 rounded-2xl overflow-hidden shrink-0 relative border border-slate-200/80 dark:border-white/10 flex flex-col items-center justify-center select-none shadow-md group-hover:shadow-2xl transition-all duration-500 ease-out">
                           {bot.imageUrl ? (
-                            <img 
-                              src={getOptimizedImageUrl(bot.imageUrl, { width: 300, height: 350 })} 
-                              referrerPolicy="no-referrer" 
-                              alt={bot.name} 
-                              className="w-full h-full object-cover cursor-zoom-in hover:scale-110 active:scale-95 transition-all duration-300" 
-                              title="Bấm vào để xem ảnh kích thước đầy đủ"
-                              onClick={(e) => { e.stopPropagation(); setViewingPhotoUrl(bot.imageUrl); }}
-                              loading="lazy"
-                            />
+                            <>
+                              <img 
+                                src={getOptimizedImageUrl(bot.imageUrl, { width: 1000, height: 1200, quality: 90 })} 
+                                referrerPolicy="no-referrer" 
+                                alt={bot.name} 
+                                className="w-full h-full object-cover object-top cursor-zoom-in group-hover:scale-105 active:scale-95 transition-all duration-500" 
+                                title="Bấm vào để xem ảnh kích thước đầy đủ"
+                                onClick={(e) => { e.stopPropagation(); setViewingPhotoUrl(bot.imageUrl); }}
+                                loading="lazy"
+                              />
+                              {/* Hover Zoom hint button */}
+                              <div 
+                                onClick={(e) => { e.stopPropagation(); setViewingPhotoUrl(bot.imageUrl); }}
+                                className="absolute top-2 left-2 p-1.5 rounded-lg bg-black/50 backdrop-blur-md text-white/90 opacity-0 group-hover:opacity-100 hover:scale-110 active:scale-90 transition-all cursor-zoom-in shadow-sm z-20"
+                                title="Bấm để phóng to ảnh"
+                              >
+                                <ZoomIn className="w-3.5 h-3.5" />
+                              </div>
+                            </>
                           ) : (
                             <>
                               {/* Animated coastal ambient glow behind emblem */}
                               <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-cyan-500/20 to-transparent pointer-events-none"></div>
                               
                               {/* Main emblem */}
-                              <span className="text-3xl filter drop-shadow animate-float-slow">
+                              <span className="text-4xl filter drop-shadow animate-float-slow">
                                 {bot.type === "GL" ? "✨" : "⚡"}
                               </span>
                             </>
                           )}
                           
                           <div className="absolute top-2 right-2 flex flex-col gap-1 items-end z-10 pointer-events-none">
+                            {hasRecentComment && (
+                              <span className="text-[8px] bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white px-2 py-0.5 rounded-full font-black uppercase tracking-wider shadow-lg shadow-emerald-500/40 animate-pulse border border-white/20 flex items-center gap-1 whitespace-nowrap">
+                                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                💬 CÓ BÌNH LUẬN MỚI
+                              </span>
+                            )}
                             {isRecentlyUpdated && (
                               <span className="text-[8px] bg-gradient-to-r from-purple-500 to-indigo-500 text-white px-2 py-0.5 rounded-full font-black uppercase tracking-wider shadow-lg shadow-purple-500/40 animate-pulse border border-white/20 flex items-center gap-0.5 whitespace-nowrap">
                                 🔄 CẬP NHẬT
@@ -1960,10 +1969,10 @@ function UserPanel({
                         </div>
 
                         {/* Mid content summary */}
-                        <div className="flex-1 flex flex-col justify-between">
+                        <div className="flex-1 min-w-0 flex flex-col justify-between">
                           <div>
                             <div className="flex justify-between items-start gap-2">
-                              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 group-hover:text-cyan-600 dark:group-hover:text-cyan-400 transition-colors line-clamp-1 flex items-center gap-1.5">
+                              <h3 className="font-serif italic font-bold tracking-wide text-[19px] sm:text-[23px] text-slate-900 dark:text-slate-50 group-hover:text-pink-600 dark:group-hover:text-pink-400 transition-colors line-clamp-1 flex items-center gap-1.5 leading-snug drop-shadow-xs">
                                 <span>{bot.name}</span>
                                 {isRecentlyUpdated && (
                                   <span className="relative flex h-2 w-2" title="Vừa cập nhật trong 24h qua">
@@ -1977,30 +1986,44 @@ function UserPanel({
                               </span>
                             </div>
 
-                            {/* Tags list mimicking Tag Cloud buttons */}
-                            <div className="flex flex-wrap gap-1 mt-1.5 font-sans">
-                              {Array.from(new Set(bot.tags)).map(t => (
-                                <span 
-                                  key={t}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleToggleTagFilter(t as string);
-                                  }}
-                                  className="text-[10px] text-cyan-600 dark:text-cyan-400 font-semibold italic cursor-pointer hover:underline mr-2"
-                                >
-                                  #{t}
-                                </span>
-                              ))}
+                            {/* Tags list: Compact, Italic, Elegant with NO truncation */}
+                            <div className="flex flex-wrap gap-1 mt-2 font-serif">
+                              <span className="font-serif italic text-[11px] font-bold uppercase px-2 py-0.5 rounded-full bg-pink-100 text-pink-700 dark:bg-pink-950/50 dark:text-pink-300 border border-pink-200/60 dark:border-pink-800/40 shadow-2xs">
+                                {bot.type}
+                              </span>
+                              {Array.from(new Set(bot.tags || [])).map(t => {
+                                const isIncluded = selectedTags.includes(t as string);
+                                const isExcluded = excludedTags.includes(t as string);
+                                return (
+                                  <span 
+                                    key={t}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleToggleTagFilter(t as string);
+                                    }}
+                                    className={`font-serif italic text-[11px] px-2 py-0.5 rounded-full border cursor-pointer transition-all shadow-2xs ${
+                                      isIncluded
+                                        ? "bg-pink-600 text-white font-bold border-pink-500"
+                                        : isExcluded
+                                        ? "bg-rose-600 text-white font-bold border-rose-500 line-through"
+                                        : "bg-slate-100/90 text-slate-600 dark:bg-slate-800/90 dark:text-slate-300 border-slate-200/60 dark:border-slate-700/60 hover:border-pink-400 hover:text-pink-600"
+                                    }`}
+                                    title={isIncluded ? "Đang chọn (Nhấp để loại trừ)" : isExcluded ? "Đang loại trừ (Nhấp để bỏ lọc)" : "Nhấp để lọc theo tag này"}
+                                  >
+                                    #{t}
+                                  </span>
+                                );
+                              })}
                             </div>
 
                             {/* Bot caption description with line clamp */}
                             <div className="mt-2.5">
-                              <p className={`text-xs text-slate-500 dark:text-slate-400 leading-relaxed text-left ${expandedPrompts.includes(bot.id) ? 'whitespace-pre-wrap' : 'line-clamp-3'}`}>
+                              <p className={`font-body font-normal text-[14px] sm:text-[15px] leading-[1.5] text-[#4B5563] dark:text-[#94A3B8] text-left ${expandedPrompts.includes(bot.id) ? 'whitespace-pre-wrap' : 'line-clamp-3'}`}>
                                 {bot.authorNote || "Không có ghi chú nào của tác giả."}
                               </p>
                               <button 
                                 onClick={(e) => { e.stopPropagation(); setExpandedPrompts(prev => prev.includes(bot.id) ? prev.filter(id => id !== bot.id) : [...prev, bot.id]); }}
-                                className="text-[10px] text-pink-500 hover:text-pink-600 dark:text-pink-400 dark:hover:text-pink-300 font-bold mt-1 transition-colors"
+                                className="text-[11px] text-pink-600 hover:text-pink-700 dark:text-pink-400 dark:hover:text-pink-300 font-bold mt-1 transition-colors cursor-pointer"
                               >
                                 {expandedPrompts.includes(bot.id) ? "▲ Thu gọn lời nhắc" : "▼ Xem thêm lời nhắc"}
                               </button>
@@ -2009,21 +2032,26 @@ function UserPanel({
 
                           {/* Stats and buttons bottom header */}
                           <div className="mt-2.5 pt-2.5 border-t border-slate-100 dark:border-white/5 flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 text-[10px] text-slate-400 dark:text-slate-500 font-medium z-30">
-                              <span className="flex items-center gap-0.5">👁️ {bot.views || 0}</span>
+                            <div className="flex items-center gap-3 font-sans text-[13px] font-medium text-slate-600 dark:text-slate-400 tabular-nums z-30">
+                              <span className="flex items-center gap-1" title="Lượt xem">
+                                <Eye className="w-3.5 h-3.5 text-cyan-500" />
+                                <span>{bot.views || 0}</span>
+                              </span>
                               <span 
-                                className="flex items-center gap-0.5 cursor-pointer hover:text-cyan-500 transition-colors"
+                                className="flex items-center gap-1 cursor-pointer hover:text-pink-600 dark:hover:text-pink-400 transition-colors"
                                 onClick={(e) => { e.stopPropagation(); setExpandedBotId(isExpanded ? null : bot.id); }}
+                                title="Bình luận"
                               >
-                                💬 {getBotCommentCount(bot)}
+                                <MessageSquare className="w-3.5 h-3.5 text-pink-500" />
+                                <span>{getBotCommentCount(bot)}</span>
                               </span>
                               <button 
                                 onClick={(e) => handleLikeBot(bot.id, e)} 
-                                className={`flex items-center gap-0.5 transition cursor-pointer hover:text-rose-500 ${isLikedByMe ? 'text-rose-500 font-bold' : 'text-slate-400'}`}
+                                className={`flex items-center gap-1 transition cursor-pointer hover:text-rose-500 ${isLikedByMe ? 'text-rose-500 font-bold' : 'text-slate-500'}`}
                                 title={isLikedByMe ? "Bỏ yêu thích" : "Yêu thích"}
                               >
-                                <Heart className={`w-3 h-3 ${isLikedByMe ? 'fill-rose-500 text-rose-500' : ''}`} /> 
-                                {bot.likes || 0}
+                                <Heart className={`w-3.5 h-3.5 ${isLikedByMe ? 'fill-rose-500 text-rose-500' : 'text-rose-400'}`} /> 
+                                <span>{bot.likes || 0}</span>
                               </button>
                             </div>
 
@@ -2040,7 +2068,7 @@ function UserPanel({
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  const shareUrl = `${window.location.origin}${window.location.pathname}?botId=${bot.id}`;
+                                  const shareUrl = (bot.links && bot.links.length > 0) ? bot.links[0].url : `${window.location.origin}${window.location.pathname}?botId=${bot.id}`;
                                   navigator.clipboard.writeText(shareUrl)
                                     .then(() => {
                                       setCopiedBotId(bot.id);
@@ -2116,7 +2144,7 @@ function UserPanel({
                                     {/* Avatar */}
                                     <div className="shrink-0 pt-1">
                                         {c.avatar ? (
-                                          c.avatar.startsWith('data:') ? (
+                                          c.avatar.match(/^(data:|http|\/)/) ? (
                                             <img src={c.avatar} alt="avatar" className="w-8 h-8 rounded-full object-cover shadow-sm" />
                                           ) : (
                                             <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-sm shadow-sm">{c.avatar}</div>
@@ -2169,7 +2197,7 @@ function UserPanel({
                                             <div key={reply.id} className="flex gap-2">
                                               <div className="shrink-0 pt-0.5">
                                                 {reply.avatar ? (
-                                                  reply.avatar.startsWith('data:') ? (
+                                                  reply.avatar.match(/^(data:|http|\/)/) ? (
                                                     <img src={reply.avatar} alt="avatar" className="w-6 h-6 rounded-full object-cover shadow-sm" />
                                                   ) : (
                                                     <div className="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-[10px] shadow-sm">{reply.avatar}</div>
@@ -2291,501 +2319,43 @@ function UserPanel({
           </div>
         )}
 
-        {/* FEEDBACK VIEW TAB */}
+        {/* LEADERBOARD VIEW TAB */}
+        {activeTab === "Leaderboard" && (
+          <LeaderboardView
+            bots={state.bots}
+            onBotClick={(bot) => handleBotClick(bot)}
+            onOpenBotDetail={(botId) => {
+              setActiveTab("GL");
+              setExpandedBotId(botId);
+            }}
+          />
+        )}
+
+        {/* FEEDBACK VIEW TAB (Masonry Grid & Auto-resize Textarea) */}
         {activeTab === "Feedback" && (
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-6">
-            <div>
-              <h2 className="font-display font-extrabold text-lg text-slate-800 dark:text-slate-100">Gửi Phản Hồi Cho Tác Giả</h2>
-              <p className="text-xs text-slate-400 mt-1">
-                Góc tâm sự nhỏ, góp ý xây dựng prompt hoặc nhắn nhủ ẩn danh riêng tư đến tác giả.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              
-              {/* Submission Form */}
-              <form onSubmit={handleSubmitFeedback} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">
-                    BIỆT DANH CỦA BẠN (Sẽ dùng: "{nickname}")
-                  </label>
-                  
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="checkbox"
-                      id="fb-chk-anon"
-                      checked={fbAnonymous}
-                      onChange={(e) => setFbAnonymous(e.target.checked)}
-                      className="rounded text-cyan-500 focus:ring-cyan-500"
-                    />
-                    <label htmlFor="fb-chk-anon" className="text-xs text-slate-600 dark:text-slate-400 select-none cursor-pointer">
-                      Gửi dưới chế độ Ẩn Danh (Giữ bí mật 100%)
-                    </label>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                    NÓNG LÒNG CHIA SẺ Ý KIẾN / PHẢN HỒI
-                  </label>
-                  <textarea
-                    id="feedback-text"
-                    required
-                    rows={4}
-                    maxLength={1000}
-                    placeholder="Tác giả làm bot xịn quá, mong tác giả ra thêm... link bot kia bị lỗi bối cảnh, tác giả sửa giúp..."
-                    value={fbContent}
-                    onChange={(e) => setFbContent(e.target.value)}
-                    className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 dark:text-white text-xs"
-                  ></textarea>
-                </div>
-
-                {fbStatus.success && (
-                  <div className="text-xs text-emerald-500 font-bold">
-                    Đã truyền phản hồi đến hòm thư tác giả thành công! Cảm ơn đóng góp của bạn.
-                  </div>
-                )}
-
-                {fbStatus.error && (
-                  <div className="text-xs text-rose-500 font-bold">{fbStatus.error}</div>
-                )}
-
-                <button
-                  id="btn-submit-guest-feedback"
-                  type="submit"
-                  className="py-2.5 px-6 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl cursor-pointer shadow transition"
-                >
-                  Gửi Feedback công khai / ẩn danh
-                </button>
-              </form>
-
-              {/* Feedbacks overview boards */}
-              <div className="space-y-4">
-                <h4 className="font-display font-semibold text-sm text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-slate-800 pb-2 flex items-center gap-1.5">
-                  <MessagesSquare className="w-4 h-4 text-cyan-500" />
-                  Hòm Thư Đang Chia Sẻ ({state.feedbacks.length})
-                </h4>
-
-                <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
-                  {state.feedbacks.length === 0 ? (
-                    <p className="text-xs text-slate-400 text-center py-6">Khu vực trống. Gửi feedback đầu tiên ngay!</p>
-                  ) : (
-                    [...state.feedbacks]
-                      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
-                      .map((fb) => (
-                      <div key={fb.id} className="flex flex-col gap-3 py-2 border-b border-slate-100 dark:border-slate-800/50 last:border-0">
-                        
-                        {/* User Feedback Bubble */}
-                        <div className="flex justify-start">
-                          <div className="max-w-[90%] md:max-w-[80%] w-full">
-                            <div className="flex items-baseline gap-2 ml-1 mb-1.5">
-                              {fb.avatar ? (
-                                fb.avatar.startsWith('data:') ? (
-                                  <img src={fb.avatar} alt="avatar" className="w-4 h-4 rounded-full object-cover" />
-                                ) : (
-                                  <span className="text-sm leading-none">{fb.avatar}</span>
-                                )
-                              ) : null}
-                              <span className="font-bold text-[10px] text-slate-600 dark:text-cyan-400">
-                                {fb.isAnonymous ? "Khách Ẩn Danh" : fb.nickname}
-                              </span>
-                              <span className="text-[9px] text-slate-400">
-                                {new Date(fb.createdAt).toLocaleDateString("vi-VN")}
-                                {fb.updatedAt && ' (đã chỉnh sửa)'}
-                              </span>
-                            </div>
-                            <div className="bg-white dark:bg-slate-800/80 border border-slate-200/60 dark:border-slate-700/60 p-3 rounded-2xl rounded-tl-sm text-xs text-slate-700 dark:text-slate-200 shadow-sm relative group">
-                              {editingFeedbackId === fb.id ? (
-                                <div className="flex flex-col gap-2">
-                                  <textarea
-                                    value={editingFeedbackContent}
-                                    onChange={(e) => setEditingFeedbackContent(e.target.value)}
-                                    className="w-full text-xs p-2 rounded-lg border border-cyan-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                                    rows={3}
-                                  />
-                                  <div className="flex justify-end gap-2">
-                                    <button onClick={() => setEditingFeedbackId(null)} className="text-[10px] font-bold text-slate-500 hover:text-slate-700 px-2 py-1">Hủy</button>
-                                    <button onClick={() => handleEditFeedback(fb.id)} className="text-[10px] font-bold text-white bg-cyan-600 hover:bg-cyan-700 px-3 py-1 rounded-lg">Lưu</button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <p className="whitespace-pre-wrap">{fb.content}</p>
-                              )}
-                              
-                              {/* Edit/Delete Actions */}
-                              {!editingFeedbackId && (fb.nickname === nickname || isAdminUnlocked) && !fb.isAnonymous && (
-                                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 bg-white/80 dark:bg-slate-800/80 p-1 rounded-lg">
-                                  <button onClick={() => { setEditingFeedbackId(fb.id); setEditingFeedbackContent(fb.content); }} className="text-cyan-600 hover:text-cyan-800 dark:text-cyan-400 p-1" title="Chỉnh sửa"><span className="text-[10px]">✏️</span></button>
-                                  <button onClick={() => handleDeleteFeedback(fb.id)} className="text-rose-500 hover:text-rose-700 p-1" title="Xóa"><span className="text-[10px]">🗑️</span></button>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        
-                        {/* Nested user replies */}
-                        {fb.replies && fb.replies.length > 0 && (
-                          <div className="flex flex-col gap-2 pl-6 md:pl-10 mt-1">
-                            {fb.replies.map(reply => (
-                              <div key={reply.id} className="flex justify-start">
-                                <div className="max-w-[90%] md:max-w-[80%]">
-                                  <div className="flex items-baseline gap-2 ml-1 mb-1">
-                                    {reply.avatar ? (
-                                      reply.avatar.startsWith('data:') ? (
-                                        <img src={reply.avatar} alt="avatar" className="w-3.5 h-3.5 rounded-full object-cover" />
-                                      ) : (
-                                        <span className="text-xs leading-none">{reply.avatar}</span>
-                                      )
-                                    ) : null}
-                                    <span className="font-bold text-[9px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                                      {reply.nickname}
-                                      {reply.isAdmin && <span className="bg-rose-500 text-white text-[8px] px-1 rounded font-extrabold tracking-wide">Tác giả</span>}
-                                    </span>
-                                    <span className="text-[8px] text-slate-400">{new Date(reply.createdAt).toLocaleDateString("vi-VN")}</span>
-                                  </div>
-                                  <div className={`p-2.5 rounded-xl rounded-tl-sm text-[11px] shadow-sm relative border ${
-                                    reply.isAdmin 
-                                      ? "bg-rose-50 dark:bg-rose-950/45 border-rose-200/60 dark:border-rose-900/40 text-rose-800 dark:text-rose-200" 
-                                      : "bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700/50 text-slate-600 dark:text-slate-300"
-                                  }`}>
-                                    <p className="whitespace-pre-wrap">{reply.content}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* User reply input */}
-                        <div className="flex justify-start pl-6 md:pl-10 mt-1">
-                          {(() => {
-                            const canReplyFeedback = isAdminUnlocked || (fb.userId && fb.userId === userId) || (!fb.userId && fb.nickname === nickname && nickname !== "Khách ẩn danh");
-                            return canReplyFeedback ? (
-                              <div className="w-full max-w-[90%] md:max-w-[80%] flex items-center gap-2">
-                                <input
-                                  type="text"
-                                  placeholder={`Trả lời phản hồi của ${fb.isAnonymous ? "Khách Ẩn Danh" : fb.nickname}...`}
-                                  value={userReplyInput[fb.id] || ""}
-                                  onChange={(e) => setUserReplyInput({ ...userReplyInput, [fb.id]: e.target.value })}
-                                  className="flex-1 text-[10px] bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-700 dark:text-white focus:outline-none focus:border-cyan-400"
-                                />
-                                <button
-                                  onClick={() => handleUserReplyFeedback(fb.id)}
-                                  disabled={!userReplyInput[fb.id]?.trim()}
-                                  className="text-[10px] font-bold text-cyan-600 disabled:opacity-50"
-                                >
-                                  Gửi
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="w-full max-w-[90%] md:max-w-[80%] text-[10px] text-slate-400 dark:text-slate-500 italic px-1 py-1">
-                                Chỉ người đưa ra góp ý này mới được phép phản hồi trả lời.
-                              </div>
-                            );
-                          })()}
-                        </div>
-                        
-                        {/* Author reply nested log - Legacy Format */}
-                        {fb.reply && (
-                          <div className="flex justify-end mt-1">
-                            <div className="max-w-[90%] md:max-w-[80%] relative">
-                              <div className="flex items-baseline justify-end gap-2 mr-1 mb-1.5">
-                                <span className="font-bold text-[10px] text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
-                                  Tác giả Zeze <Sparkles className="w-2.5 h-2.5 text-amber-500" />
-                                </span>
-                              </div>
-                              <div className="bg-gradient-to-tr from-cyan-600 to-indigo-600 text-white p-3 rounded-2xl rounded-br-sm text-xs shadow-sm relative">
-                                <p className="whitespace-pre-wrap font-medium">{fb.reply}</p>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-            </div>
-          </div>
+          <MasonryFeedbackView
+            feedbacks={state.feedbacks || []}
+            onRefresh={() => onRefresh(true)}
+            nickname={nickname}
+            avatar={avatar}
+            userId={userId}
+            isAdminUnlocked={isAdminUnlocked}
+            passcode={passcode}
+          />
         )}
 
-        {/* REQUESTS VIEW TAB */}
+        {/* REQUESTS VIEW TAB (Masonry Grid & Auto-resize Textarea) */}
         {activeTab === "Requests" && (
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-6">
-            <div>
-              <h2 className="font-display font-extrabold text-lg text-slate-800 dark:text-slate-100 animate-pulse">
-                Đăng Mong Muốn Thiết Kế Bot Sắp Tới
-              </h2>
-              <p className="text-xs text-slate-400 mt-1">
-                Có ý tưởng sáng tạo nào về các vai GL, Futa mong muốn tác giả hiện thực hóa? Đăng lên đây để mọi người cùng upvote cho tác giả thấy nhé!
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              
-              {/* Form submit */}
-              <div className="lg:col-span-1 bg-slate-50 dark:bg-slate-950 p-5 rounded-2xl border border-slate-150 dark:border-slate-850">
-                <h4 className="font-display font-bold text-slate-800 dark:text-slate-200 text-sm mb-4">Gửi đề cử ý tưởng</h4>
-                
-                <form onSubmit={handleSubmitRequest} className="space-y-4 text-xs">
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Mẫu Tên Bot Muốn Tạo</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Ví dụ: Nữ Thần Chiến Tranh sa ngã..."
-                      value={reqTitle}
-                      onChange={(e) => setReqTitle(e.target.value)}
-                      className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg dark:text-white"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Dòng Mô Hình</label>
-                    <div className="flex gap-4">
-                      <label className="flex items-center gap-1 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="req-type"
-                          checked={reqType === "GL"}
-                          onChange={() => setReqType("GL")}
-                          className="text-cyan-500 focus:ring-cyan-500"
-                        />
-                        <span>Thuần GL</span>
-                      </label>
-                      <label className="flex items-center gap-1 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="req-type"
-                          checked={reqType === "Futa"}
-                          onChange={() => setReqType("Futa")}
-                          className="text-cyan-500 focus:ring-cyan-500"
-                        />
-                        <span>Futa Model</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Mô Tả Bối Cảnh, Tính Cách Bot</label>
-                    <textarea
-                      required
-                      rows={4}
-                      placeholder="Ghi rõ bối cảnh, ngoại hình, tính cách (ngạo kiều, lạnh lùng, thê nô...) và cách thức xưng hô bạn mong mỏi..."
-                      value={reqDesc}
-                      onChange={(e) => setReqDesc(e.target.value)}
-                      className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg dark:text-white"
-                    ></textarea>
-                  </div>
-
-                  {reqStatus.success && (
-                    <p className="text-[11px] text-emerald-500 font-bold">Đề xuất thành công! Nhờ bạn bè vào vote sập sàn nha.</p>
-                  )}
-
-                  {reqStatus.error && (
-                    <p className="text-[11px] text-rose-500 font-bold">{reqStatus.error}</p>
-                  )}
-
-                  <button
-                    id="btn-submit-bot-idea"
-                    type="submit"
-                    className="w-full py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg font-bold cursor-pointer transition text-xs"
-                  >
-                    Đăng Đề Cử Ngay
-                  </button>
-                </form>
-              </div>
-
-              {/* Suggestions showcase list */}
-              <div className="lg:col-span-2 space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 p-3 bg-slate-100/40 dark:bg-slate-950/40 border border-slate-150 dark:border-white/5 rounded-2xl shadow-sm">
-                  <h4 className="font-display font-semibold text-slate-800 dark:text-slate-100 text-sm flex items-center gap-1.5">
-                    <ThumbsUp className="w-4 h-4 text-purple-500 animate-pulse" />
-                    Đề Cử Đợi Vote ({state.botRequests.filter(req => !requestSearchKeyword || req.title.toLowerCase().includes(requestSearchKeyword.toLowerCase()) || req.description.toLowerCase().includes(requestSearchKeyword.toLowerCase())).length})
-                  </h4>
-                  
-                  {/* Search input for requests list */}
-                  <div className="relative w-full sm:w-64">
-                    <input
-                      type="text"
-                      placeholder="Tìm ý tưởng, từ khóa..."
-                      value={requestSearchKeyword}
-                      onChange={(e) => setRequestSearchKeyword(e.target.value)}
-                      className="w-full pl-8 pr-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 rounded-xl text-xs dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                    />
-                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
-                  </div>
-                </div>
-
-                <div className="flex gap-4 overflow-x-auto pb-4 pt-2 snap-x snap-mandatory custom-scrollbar">
-                  {[...state.botRequests]
-                    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
-                    .filter(req => {
-                      const kw = requestSearchKeyword.toLowerCase();
-                      return !requestSearchKeyword || req.title.toLowerCase().includes(kw) || req.description.toLowerCase().includes(kw) || (req.nickname || "").toLowerCase().includes(kw);
-                    }).length === 0 ? (
-                    <p className="text-xs text-slate-400 text-center py-8 w-full">Chưa có ý tưởng/đề cử nào phù hợp với từ khóa dạo chơi.</p>
-                  ) : (
-                    [...state.botRequests]
-                      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
-                      .filter(req => {
-                        const kw = requestSearchKeyword.toLowerCase();
-                        return !requestSearchKeyword || req.title.toLowerCase().includes(kw) || req.description.toLowerCase().includes(kw) || (req.nickname || "").toLowerCase().includes(kw);
-                      }).map((req) => {
-                      const hasVoted = req.votedUserIds?.includes(userId);
-                      const currentStatus = req.status || "Chờ duyệt";
-                      let statusBadge = "bg-slate-100 text-slate-500 dark:bg-slate-900 dark:text-slate-400 border-slate-200 dark:border-slate-800";
-                      if (currentStatus === "Đang làm") {
-                        statusBadge = "bg-amber-50 text-amber-700 dark:bg-amber-950/20 dark:text-amber-400 border-amber-200/30";
-                      } else if (currentStatus === "Đã xong") {
-                        statusBadge = "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-400 border-emerald-200/30";
-                      } else if (currentStatus === "Không khả thi") {
-                        statusBadge = "bg-rose-50 text-rose-700 dark:bg-rose-950/20 dark:text-rose-400 border-rose-200/30";
-                      }
-
-                      return (
-                        <div 
-                          key={req.id}
-                          className="min-w-[320px] w-[85%] md:w-[450px] max-w-[500px] shrink-0 snap-center p-4 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-150 dark:border-slate-800 transition flex flex-col gap-3 text-xs shadow-sm"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              {req.avatar ? (
-                                req.avatar.startsWith('data:') ? (
-                                  <img src={req.avatar} alt="avatar" className="w-8 h-8 rounded-full object-cover shrink-0 border border-slate-200 dark:border-slate-700" />
-                                ) : (
-                                  <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-lg">{req.avatar}</div>
-                                )
-                              ) : null}
-                              <div className="flex flex-col">
-                                <span className="font-semibold text-slate-700 dark:text-slate-300 text-xs">{req.nickname}</span>
-                                <span className="text-[9px] text-slate-400">{new Date(req.createdAt).toLocaleDateString("vi-VN")}</span>
-                              </div>
-                            </div>
-                            
-                            <button
-                              onClick={() => handleVoteRequest(req.id)}
-                              className={`flex flex-col items-center justify-center p-1.5 px-2.5 rounded-xl border transition-all shrink-0 cursor-pointer ${
-                                hasVoted 
-                                  ? 'bg-rose-50 border-rose-200 text-rose-600 dark:bg-rose-900/30 dark:border-rose-800 dark:text-rose-400 shadow-inner' 
-                                  : 'bg-white border-slate-200 text-slate-400 hover:border-rose-300 hover:text-rose-500 dark:bg-slate-900 dark:border-slate-800 dark:hover:border-rose-800 shadow-sm'
-                              }`}
-                              title={hasVoted ? "Bỏ vote" : "Vote 1 phiếu ủng hộ"}
-                            >
-                              <ThumbsUp className={`w-3.5 h-3.5 mb-0.5 ${hasVoted ? 'fill-rose-500' : ''}`} />
-                              <span className="font-bold text-[10px]">{req.votes || 0}</span>
-                            </button>
-                          </div>
-
-                          <div className="space-y-2 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${
-                                req.type === "GL" ? "bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300" : "bg-cyan-100 text-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-300"
-                              }`}>
-                                {req.type}
-                              </span>
-                              <h5 className="font-bold text-slate-900 dark:text-slate-100 text-sm leading-snug">{req.title}</h5>
-                            </div>
-                            <div className="pb-1">
-                              <span className={`text-[8.5px] px-2 py-0.5 font-semibold rounded-full border inline-flex items-center gap-1 ${statusBadge}`}>
-                                {currentStatus === "Chờ duyệt" && "⏳ "}{currentStatus === "Đang làm" && "⚙️ "}{currentStatus === "Đã xong" && "✅ "}{currentStatus === "Không khả thi" && "❌ "}{currentStatus}
-                              </span>
-                            </div>
-
-                            <p className="text-slate-600 dark:text-slate-400 font-mono text-[11px] leading-relaxed italic bg-white dark:bg-slate-900 p-2.5 rounded border border-slate-100 dark:border-slate-850">
-                              "{req.description}"
-                            </p>
-
-                            <div className="space-y-2.5 mt-2.5 bg-slate-100/50 dark:bg-slate-900/40 p-3 rounded-2xl border border-slate-200/40 dark:border-white/5">
-                              {/* Legacy Admin Reply */}
-                              {req.reply && (
-                                <div className="p-3 bg-purple-500/5 dark:bg-purple-500/10 rounded-xl border border-purple-500/15 dark:border-purple-500/10 text-[11px] relative select-none">
-                                  <div className="absolute top-2 right-3 flex items-center gap-1">
-                                    <span className="w-1 h-1 rounded-full bg-purple-500 animate-ping"></span>
-                                    <span className="text-[8.5px] text-purple-500 font-bold uppercase tracking-wider">Zeze</span>
-                                  </div>
-                                  <p className="text-slate-700 dark:text-slate-200 leading-relaxed text-justify">
-                                    <strong className="text-purple-600 dark:text-purple-400">Phản hồi từ Tác giả:</strong> {req.reply}
-                                  </p>
-                                </div>
-                              )}
-
-                              {/* Thread of user replies back to the author */}
-                              {req.userReplies && req.userReplies.length > 0 && (
-                                <div className="space-y-2 pl-2 md:pl-3">
-                                  {req.userReplies.map((ur) => (
-                                    <div key={ur.id} className={`p-2 rounded-lg border text-[11px] transition-colors duration-200 ${
-                                      ur.isAdmin 
-                                        ? "bg-rose-50/80 dark:bg-rose-950/35 border-rose-200/60 dark:border-rose-900/45 text-rose-900 dark:text-rose-100" 
-                                        : "bg-white dark:bg-slate-950 border-slate-200/40 dark:border-slate-800 text-slate-700 dark:text-slate-300"
-                                    }`}>
-                                      <div className="flex justify-between items-center mb-1 text-[9.5px] text-slate-450 dark:text-slate-500">
-                                        <span className="font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                                          {ur.avatar ? (
-                                            ur.avatar.startsWith('data:') ? (
-                                              <img src={ur.avatar} alt="avatar" className="w-3 h-3 rounded-full object-cover shrink-0" />
-                                            ) : (
-                                              <span className="text-[10px] leading-none">{ur.avatar}</span>
-                                            )
-                                          ) : null}
-                                          <span>@{ur.nickname}</span> 
-                                          {ur.isAdmin && <span className="bg-red-500 text-white text-[8px] px-1 rounded font-bold">Tác giả</span>}
-                                        </span>
-                                        <span>
-                                          {new Date(ur.createdAt).toLocaleDateString("vi-VN")} {new Date(ur.createdAt).toLocaleTimeString("vi-VN", { hour: '2-digit', minute: '2-digit' })}
-                                        </span>
-                                      </div>
-                                      <p className="text-slate-600 dark:text-slate-400 text-justify font-mono text-[11px] leading-relaxed">
-                                        {ur.content}
-                                      </p>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-
-                              {/* Sub-reply input box */}
-                              <div className="flex gap-2">
-                                <input
-                                  type="text"
-                                  placeholder="Gửi câu trả lời, phản hồi..."
-                                  id={`reply-input-${req.id}`}
-                                  className="flex-1 py-1.5 px-3 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl placeholder-slate-400 dark:placeholder-slate-500 text-[11px] text-slate-850 dark:text-slate-100 focus:outline-none focus:border-purple-500"
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      const inputEl = document.getElementById(`reply-input-${req.id}`) as HTMLInputElement;
-                                      if (inputEl && inputEl.value.trim()) {
-                                        handlePostRequestReply(req.id, inputEl.value.trim());
-                                        inputEl.value = '';
-                                      }
-                                    }
-                                  }}
-                                />
-                                <button
-                                  onClick={() => {
-                                    const inputEl = document.getElementById(`reply-input-${req.id}`) as HTMLInputElement;
-                                    if (inputEl && inputEl.value.trim()) {
-                                      handlePostRequestReply(req.id, inputEl.value.trim());
-                                      inputEl.value = '';
-                                    }
-                                  }}
-                                  className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-[10px] uppercase tracking-wider transition duration-200 cursor-pointer shrink-0"
-                                >
-                                  Gửi
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
+          <MasonryRequestsView
+            botRequests={state.botRequests || []}
+            onRefresh={() => onRefresh(true)}
+            nickname={nickname}
+            avatar={avatar}
+            userId={userId}
+            isAdminUnlocked={isAdminUnlocked}
+            passcode={passcode}
+          />
         )}
-
         {/* --- LIGHTBOX MODAL --- */}
         {viewingPhotoUrl && (
           <div 
@@ -2821,6 +2391,7 @@ function UserPanel({
           onEquipTitle={handleEquipTitle}
           equippedTitle={equippedTitle}
         />
+
 
       </div>
       </div>

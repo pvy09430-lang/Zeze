@@ -187,7 +187,7 @@ export default function OAuthLoginModal({ isOpen, onClose, onLoginSuccess, onLog
 
             <div className="flex flex-col items-center justify-center space-y-3 py-4">
               <div className="w-20 h-20 rounded-full border-4 border-cyan-500/20 flex items-center justify-center text-4xl shadow-lg relative overflow-hidden bg-white dark:bg-slate-800">
-                {selectedAvatar && selectedAvatar.startsWith('data:') ? (
+                {selectedAvatar && selectedAvatar.match(/^(data:|http|\/)/) ? (
                   <img src={selectedAvatar} className="w-full h-full object-cover" alt="avatar" />
                 ) : (
                   <span>{selectedAvatar}</span>
@@ -282,7 +282,7 @@ export default function OAuthLoginModal({ isOpen, onClose, onLoginSuccess, onLog
                     </label>
                   </label>
                   <div className="grid grid-cols-6 gap-2">
-                    {selectedAvatar && selectedAvatar.startsWith('data:') && (
+                    {selectedAvatar && selectedAvatar.match(/^(data:|http|\/)/) && (
                       <button
                         type="button"
                         className="p-1 text-base rounded-xl border border-cyan-500 bg-cyan-500/10 scale-105 shadow-md font-bold transition-all cursor-pointer flex items-center justify-center overflow-hidden"
@@ -528,7 +528,7 @@ export default function OAuthLoginModal({ isOpen, onClose, onLoginSuccess, onLog
                       </label>
                     </label>
                     <div className="grid grid-cols-6 gap-2">
-                      {selectedAvatar && selectedAvatar.startsWith('data:') && (
+                      {selectedAvatar && selectedAvatar.match(/^(data:|http|\/)/) && (
                         <button
                           type="button"
                           className="p-1 text-base rounded-xl border border-cyan-500 bg-cyan-500/10 scale-105 shadow-md font-bold transition-all cursor-pointer flex items-center justify-center overflow-hidden"

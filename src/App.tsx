@@ -11,6 +11,7 @@ import {
 import { db } from "./firebase";
 import { collection, getDocs, doc, setDoc, onSnapshot } from "firebase/firestore";
 import AboutAuthor from "./components/AboutAuthor";
+import NewBotWeeklyModal from "./components/NewBotWeeklyModal";
 import { getCachedAppState, setCachedAppState } from "./lib/indexedDbCache";
 
 export default function App() {
@@ -50,7 +51,24 @@ export default function App() {
   // Banner Push alert/notifications state
   const [pushAlert, setPushAlert] = useState<{ show: boolean; title: string; desc: string; type: "post" | "announcement" | "comment" | "reply" } | null>(null);
   const [hasNewAnnouncements, setHasNewAnnouncements] = useState(false);
-  const [showAnnOverlay, setShowAnnOverlay] = useState(true);
+  
+  // Weekly new bot pop-up modal state & check (bots in past 7 days)
+  const [isNewBotWeeklyModalOpen, setIsNewBotWeeklyModalOpen] = useState(false);
+  const hasWeeklyBots = React.useMemo(() => {
+    const now = Date.now();
+    const sevenDaysMs = 7 * 24 * 3600 * 1000;
+    return (state.bots || []).some(
+      (b) => b.createdAt && now - new Date(b.createdAt).getTime() <= sevenDaysMs
+    );
+  }, [state.bots]);
+
+  useEffect(() => {
+    const hasSeen = sessionStorage.getItem("has_seen_weekly_bots_popup");
+    if (!hasSeen && hasWeeklyBots) {
+      setIsNewBotWeeklyModalOpen(true);
+      sessionStorage.setItem("has_seen_weekly_bots_popup", "true");
+    }
+  }, [hasWeeklyBots]);
 
   // Sound play toggle for bells
   const [playAlertSound, setPlayAlertSound] = useState(true);
@@ -65,7 +83,13 @@ export default function App() {
   // Read config state from API with automatic retries and robust data structure verification
   const fetchStateWithRetry = async (silent = false, retries = 3, delay = 1000): Promise<AppState> => {
     try {
-      const response = await fetch(`/api/state?_t=${Date.now()}`);
+      const response = await fetch(`/api/state?_t=${Date.now()}`, {
+        headers: {
+          "Accept": "application/json, text/plain, */*"
+        },
+        credentials: "same-origin"
+      });
+
       if (!response.ok) {
         throw new Error(`Server returned HTTP status ${response.status}`);
       }
@@ -73,13 +97,16 @@ export default function App() {
       const text = await response.text();
       const trimmed = text.trim();
       if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-        console.error("[DEBUG UPSTREAM] Nhận phản hồi không hợp lệ (Không phải JSON) từ backend:", {
-          status: response.status,
-          statusText: response.statusText,
-          headers: Array.from(response.headers.entries()),
-          bodySample: trimmed.substring(0, 500)
-        });
-        throw new Error(`Phản hồi từ máy chủ không phải định dạng JSON (Upstream error: ${trimmed.substring(0, 30)}...)`);
+        if (trimmed.includes("<title>Starting Server...</title>") || trimmed.includes("Starting Server")) {
+           throw new Error("Máy chủ đang khởi động, vui lòng đợi...");
+        }
+        if (trimmed.includes("<title>Cookie check</title>") || trimmed.includes("Cookie check")) {
+           throw new Error("Đang hoàn tất xác thực kết nối hạ tầng (Cookie check)...");
+        }
+        if (retries === 0 && !silent) {
+          console.warn("[Upstream Notice] Phản hồi tạm thời chưa phải định dạng JSON từ gateway:", response.status);
+        }
+        throw new Error(`Phản hồi từ máy chủ chưa sẵn sàng (Upstream response: ${trimmed.substring(0, 30)}...)`);
       }
       let data: any;
       try {
@@ -111,7 +138,9 @@ export default function App() {
       return data as AppState;
     } catch (error: any) {
       if (retries > 0) {
-        console.warn(`[Auto-Retry] Lỗi đồng bộ dữ liệu: "${error.message}". Thử lại sau ${delay}ms... (Còn lại ${retries} lần)`, error);
+        if (!silent) {
+          console.warn(`[Auto-Retry] Đang kết nối lại dữ liệu: "${error.message}". Thử lại sau ${delay}ms... (Còn lại ${retries} lần)`);
+        }
         await new Promise(resolve => setTimeout(resolve, delay));
         return fetchStateWithRetry(silent, retries - 1, delay * 1.5);
       }
@@ -493,15 +522,74 @@ export default function App() {
       return;
     }
 
-    // Timestamp check: Prevent older state from overwriting newer local state
-    const currentTs = state?.lastUpdated || (state?.updatedAt ? new Date(state.updatedAt).getTime() : 0);
-    const newTs = newState.lastUpdated || (newState.updatedAt ? new Date(newState.updatedAt).getTime() : 0);
-    if (currentTs > 0 && newTs > 0 && newTs < currentTs) {
-      console.warn("⚠️ [handleUpdateLocalState] Đã bỏ qua dữ liệu cũ hơn để tránh ghi đè thay đổi mới.");
-      return;
+    // Smart merge: retain any newly posted local items so incoming server sync never wipes them out
+    let safeBots = newState.bots || [];
+    if (state?.bots && state.bots.length > 0) {
+      const serverBotMap = new Map((newState.bots || []).map(b => [b.id, b]));
+      safeBots = (state.bots || []).map(localBot => {
+        const srvBot = serverBotMap.get(localBot.id);
+        if (!srvBot) return localBot;
+
+        const srvCommentIds = new Set((srvBot.comments || []).map(c => c.id));
+        const extraLocalComments = (localBot.comments || []).filter(c => !srvCommentIds.has(c.id));
+
+        const mergedComments = [
+          ...(srvBot.comments || []).map(srvC => {
+            const locC = (localBot.comments || []).find(c => c.id === srvC.id);
+            if (!locC) return srvC;
+            const srvReplyIds = new Set((srvC.replies || []).map(r => r.id));
+            const extraLocalReplies = (locC.replies || []).filter(r => !srvReplyIds.has(r.id));
+            return {
+              ...srvC,
+              replies: [...(srvC.replies || []), ...extraLocalReplies]
+            };
+          }),
+          ...extraLocalComments
+        ];
+
+        return {
+          ...srvBot,
+          views: Math.max(localBot.views || 0, srvBot.views || 0),
+          likes: Math.max(localBot.likes || 0, srvBot.likes || 0),
+          comments: mergedComments
+        };
+      });
+
+      const localBotIds = new Set(safeBots.map(b => b.id));
+      (newState.bots || []).forEach(b => {
+        if (!localBotIds.has(b.id)) safeBots.push(b);
+      });
     }
 
-    const stateToSet = { ...newState, lastUpdated: newTs || Date.now() };
+    let safeAnnouncements = newState.announcements || [];
+    if (state?.announcements && state.announcements.length > 0) {
+      const srvAnnIds = new Set((newState.announcements || []).map(a => a.id));
+      const extraLocalAnn = state.announcements.filter(a => !srvAnnIds.has(a.id));
+      safeAnnouncements = [...(newState.announcements || []), ...extraLocalAnn];
+    }
+
+    let safeFeedbacks = newState.feedbacks || [];
+    if (state?.feedbacks && state.feedbacks.length > 0) {
+      const srvFbIds = new Set((newState.feedbacks || []).map(f => f.id));
+      const extraLocalFb = state.feedbacks.filter(f => !srvFbIds.has(f.id));
+      safeFeedbacks = [...(newState.feedbacks || []), ...extraLocalFb];
+    }
+
+    let safeBotRequests = newState.botRequests || [];
+    if (state?.botRequests && state.botRequests.length > 0) {
+      const srvReqIds = new Set((newState.botRequests || []).map(r => r.id));
+      const extraLocalReq = state.botRequests.filter(r => !srvReqIds.has(r.id));
+      safeBotRequests = [...(newState.botRequests || []), ...extraLocalReq];
+    }
+
+    const stateToSet = {
+      ...newState,
+      bots: safeBots,
+      announcements: safeAnnouncements,
+      feedbacks: safeFeedbacks,
+      botRequests: safeBotRequests,
+      lastUpdated: Date.now()
+    };
     setState(stateToSet);
 
     // Send small diff patch to server if provided to eliminate full state network overwrites
@@ -633,16 +721,16 @@ export default function App() {
               {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
 
-            {/* Bell Announcement Indicator Modal Trigger */}
+            {/* Bell trigger for Weekly New Bots - Replaces the old bell next to dark mode, compact bell icon */}
             <div className="relative">
               <button
-                onClick={() => { setHasNewAnnouncements(false); setShowAnnOverlay(true); }}
-                className="p-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-550 dark:text-cyan-400 cursor-pointer transition relative"
-                title="Bản tin từ tác giả"
+                onClick={() => setIsNewBotWeeklyModalOpen(true)}
+                className="p-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-550 dark:text-pink-400 cursor-pointer transition relative"
+                title="Thông báo Bot mới ra mắt trong tuần"
               >
-                <Bell className="w-4 h-4" />
-                {hasNewAnnouncements && (
-                  <span className="w-2.5 h-2.5 bg-red-500 border border-white rounded-full absolute top-1 right-1 animate-ping"></span>
+                <Bell className={`w-4 h-4 ${hasWeeklyBots ? "text-pink-500 animate-bounce" : ""}`} />
+                {hasWeeklyBots && (
+                  <span className="w-2.5 h-2.5 bg-rose-500 border-2 border-white dark:border-slate-900 rounded-full absolute -top-0.5 -right-0.5 animate-pulse"></span>
                 )}
               </button>
             </div>
@@ -856,56 +944,21 @@ export default function App() {
         currentAvatar={avatar}
       />
 
-      {/* CENTRAL ANNOUNCEMENT MODAL */}
-      {showAnnOverlay && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowAnnOverlay(false)}></div>
-          <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl relative z-10 animate-fade-in-up flex flex-col max-h-[80vh] overflow-hidden">
-            <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800 shrink-0">
-              <h4 className="font-display font-bold text-sm md:text-base flex items-center gap-1.5 text-slate-800 dark:text-slate-100">
-                <Megaphone className="w-4 h-4 text-amber-500 animate-pulse" />
-                Bản tin mới từ tác giả
-              </h4>
-              <button
-                onClick={() => setShowAnnOverlay(false)}
-                className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            <div className="p-4 overflow-y-auto w-full">
-              {state.announcements.length === 0 ? (
-                <div className="text-center py-10">
-                  <p className="text-sm text-slate-500 dark:text-slate-400 italic">Hiện tại chưa có thông báo nào từ tác giả.</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {state.announcements.map((ann) => (
-                    <div key={ann.id} className="bg-amber-50/50 dark:bg-slate-950/50 p-4 rounded-xl border border-amber-100/50 dark:border-slate-800 space-y-1.5">
-                      <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">{ann.title}</p>
-                      <p className="text-slate-600 dark:text-slate-300 text-xs leading-relaxed text-justify whitespace-pre-wrap select-text">
-                        {ann.content}
-                      </p>
-                      <p className="text-[10px] text-slate-400 text-right mt-2 font-mono">{new Date(ann.createdAt).toLocaleDateString("vi-VN")}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            {state.announcements.length > 0 && (
-              <div className="p-3 border-t border-slate-100 dark:border-slate-800 text-center shrink-0">
-                <button
-                  onClick={() => setShowAnnOverlay(false)}
-                  className="px-5 py-2 w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold rounded-xl text-xs transition"
-                >
-                  Đã rõ & Đóng
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Weekly New Bot Pop-Up Modal (Tự động mở khi vào trang nếu có bot mới trong 7 ngày, hoặc bấm chuông trên header) */}
+      <NewBotWeeklyModal
+        bots={state.bots || []}
+        isOpen={isNewBotWeeklyModalOpen}
+        onClose={() => setIsNewBotWeeklyModalOpen(false)}
+        onBotClick={(bot) => {
+          if (bot.links && bot.links.length > 0) {
+            window.open(bot.links[0].url, "_blank", "noopener,noreferrer");
+          }
+        }}
+        onOpenBotDetail={() => {
+          setViewMode("user");
+          setIsNewBotWeeklyModalOpen(false);
+        }}
+      />
 
       {/* FOOTER METRICS AND CREDIT (Highly polished, 100% full stretch) */}
       <footer className="bg-white/80 dark:bg-slate-900/80 border-t border-cyan-100 dark:border-slate-900 text-slate-400 text-xs py-8 relative z-10 mt-auto">

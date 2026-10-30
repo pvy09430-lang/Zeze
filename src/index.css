@@ -5,7 +5,9 @@
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Space Grotesk", sans-serif;
+  --font-heading: "Be Vietnam Pro", "Inter", sans-serif;
+  --font-body: "Mulish", "Inter", sans-serif;
+  --font-display: "Be Vietnam Pro", "Space Grotesk", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
